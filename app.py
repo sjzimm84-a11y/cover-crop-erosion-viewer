@@ -177,7 +177,7 @@ def main() -> None:
     transform, width, height = calculate_default_transform(
         dem_profile['crs'], ndvi_profile['crs'], 
         dem_profile['width'], dem_profile['height'], 
-        *dem_profile.bounds
+        *dem_transform.bounds     # ← dem_transform (not profile!)
     )
     dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
     reproject(
