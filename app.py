@@ -173,11 +173,11 @@ def main() -> None:
     # Handle CRS mismatch if needed
     if ndvi_profile.get('crs') != dem_profile.get('crs'):
         st.warning("CRS mismatch between NDVI and DEM. Reprojecting DEM to match NDVI.")
-    from rasterio.warp import calculate_default_transform, reproject
+        from rasterio.warp import calculate_default_transform, reproject
     transform, width, height = calculate_default_transform(
         dem_profile['crs'], ndvi_profile['crs'], 
         dem_profile['width'], dem_profile['height'], 
-        *dem_profile['transform'].bounds   # ← THIS IS CORRECT!
+        *dem_profile.bounds
     )
     dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
     reproject(
