@@ -9,7 +9,8 @@ import streamlit as st
 import folium
 
 import rasterio
-from rasterio.warp import reproject, Resampling
+from rasterio.warp import reproject, Resampling, calculate_default_transform
+from rasterio.transform import array_bounds
 
 from src.io_utils import (
     load_boundary_file,
@@ -170,27 +171,32 @@ def main() -> None:
         st.error(f"Unable to clip DEM raster: {exc}")
         return
 
-    # Handle CRS mismatch if needed
+    # FIX 1 & 2 & 3: Corrected indentation, removed redundant import, and replaced
+    # dem_transform.bounds (invalid on Affine) with rasterio.transform.array_bounds()
     if ndvi_profile.get('crs') != dem_profile.get('crs'):
         st.warning("CRS mismatch between NDVI and DEM. Reprojecting DEM to match NDVI.")
-        from rasterio.warp import calculate_default_transform, reproject
-    transform, width, height = calculate_default_transform(
-        dem_profile['crs'], ndvi_profile['crs'], 
-        dem_profile['width'], dem_profile['height'], 
-        *dem_profile.bounds
-    )
-    dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
-    reproject(
-        source=dem_array,
-        destination=dem_reproj,
-        src_transform=dem_profile['transform'],
-        src_crs=dem_profile['crs'],
-        dst_transform=transform,
-        dst_crs=ndvi_profile['crs'],
-        resampling=Resampling.nearest  # bilinear better for slope
-    )
-    dem_array = dem_reproj    # Good!
-    dem_transform = transform # Good!
+        left, bottom, right, top = array_bounds(
+            dem_profile['height'], dem_profile['width'], dem_transform
+        )
+        transform, width, height = calculate_default_transform(
+            dem_profile['crs'], ndvi_profile['crs'],
+            dem_profile['width'], dem_profile['height'],
+            left, bottom, right, top
+        )
+        dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
+        reproject(
+            source=dem_array,
+            destination=dem_reproj,
+            # FIX 4: use the clipped dem_transform, not dem_profile['transform']
+            src_transform=dem_transform,
+            src_crs=dem_profile['crs'],
+            dst_transform=transform,
+            dst_crs=ndvi_profile['crs'],
+            # FIX 5: bilinear is more accurate than nearest for continuous slope surface
+            resampling=Resampling.bilinear,
+        )
+        dem_array = dem_reproj
+        dem_transform = transform
 
     status_text.text("Computing slope...")
     progress_bar.progress(70)
@@ -198,7 +204,6 @@ def main() -> None:
 
     if ndvi_array.shape != slope_percent.shape:
         st.info(f"Resampling slope from {slope_percent.shape} to match NDVI {ndvi_array.shape}...")
-        # Resample slope to match NDVI grid
         slope_resampled = np.empty(ndvi_array.shape, dtype=slope_percent.dtype)
         reproject(
             source=slope_percent,
@@ -207,7 +212,8 @@ def main() -> None:
             dst_transform=ndvi_transform,
             src_crs=dem_profile.get('crs'),
             dst_crs=ndvi_profile.get('crs'),
-            resampling=Resampling.nearest
+            # FIX 5 (continued): bilinear for slope resampling here too
+            resampling=Resampling.bilinear,
         )
         slope_percent = slope_resampled
 
