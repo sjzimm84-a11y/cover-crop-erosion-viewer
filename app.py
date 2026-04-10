@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 from typing import Optional
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -12,10 +13,7 @@ import rasterio
 from rasterio.warp import reproject, Resampling, calculate_default_transform
 from rasterio.transform import array_bounds
 
-from src.io_utils import (
-    load_boundary_file,
-    save_uploaded_file,
-)
+from src.io_utils import load_boundary_file, save_uploaded_file
 from src.raster_utils import (
     clip_raster_to_geometry,
     compute_slope_from_dem,
@@ -23,311 +21,487 @@ from src.raster_utils import (
     zone_risk_summary,
 )
 from src.sample_data import ensure_sample_data
-from src.scoring import DEFAULT_THRESHOLDS, score_erosion_concern
+from src.scoring import (
+    DEFAULT_THRESHOLDS,
+    score_erosion_concern,
+    pixel_level_concern,
+    SPECIES_C_TARGETS,
+)
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 
+# Sentinel-2 imports — graceful fallback if credentials not yet configured
+try:
+    from src.sentinel_utils import get_token_from_streamlit_secrets, fetch_ndvi_for_field
+    from src.ndvi_scheduler import fetch_best_available_ndvi, fetch_ndvi_comparison
+    SENTINEL_AVAILABLE = True
+except Exception:
+    SENTINEL_AVAILABLE = False
 
-APP_TITLE = "Cover Crop Erosion Viewer"
+APP_TITLE       = "Cover Crop Erosion Viewer"
 APP_DESCRIPTION = (
-    "Estimate field-level erosion concern using early-season NDVI and terrain slope. "
-    "Use synthetic sample data or upload your own field boundary and rasters."
+    "Field-level erosion risk using Sentinel-2 NDVI and terrain slope. "
+    "NRCS EQIP ready · Iowa RUSLE C-factor scoring · Automated satellite pull."
 )
 
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon="🌾",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-def calculate_c_factor(ndvi_mean: float) -> float:
-    """Proxy C-factor from NDVI (0-1 scale). Higher NDVI = lower erosion potential."""
-    return max(0.0, 1.0 - ndvi_mean)
+# ---------------------------------------------------------------------------
+# Custom CSS — professional ag-tech aesthetic
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+    /* Main background */
+    .stApp { background-color: #0e1117; }
 
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
+    }
 
-def main() -> None:
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 12px;
+    }
+
+    /* Concern level badges */
+    .badge-low      { background:#1a7f37; color:white; padding:4px 12px; border-radius:12px; font-weight:600; }
+    .badge-moderate { background:#9a6700; color:white; padding:4px 12px; border-radius:12px; font-weight:600; }
+    .badge-high     { background:#cf222e; color:white; padding:4px 12px; border-radius:12px; font-weight:600; }
+    .badge-critical { background:#6e1c1c; color:white; padding:4px 12px; border-radius:12px; font-weight:600; }
+
+    /* Section headers */
+    h2 { color: #58a6ff !important; border-bottom: 1px solid #30363d; padding-bottom: 6px; }
+    h3 { color: #79c0ff !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
+col_logo, col_title = st.columns([1, 8])
+with col_logo:
+    st.markdown("## 🌾")
+with col_title:
     st.title(APP_TITLE)
-    st.write(APP_DESCRIPTION)
+    st.caption(APP_DESCRIPTION)
 
-    # Session state for demo mode
-    if 'demo_loaded' not in st.session_state:
-        st.session_state.demo_loaded = False
+st.divider()
 
-    data_dir = Path(__file__).parent / "data"
-    sample_paths = ensure_sample_data(data_dir)
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+if "demo_loaded" not in st.session_state:
+    st.session_state.demo_loaded = False
+if "ndvi_source" not in st.session_state:
+    st.session_state.ndvi_source = "auto"   # "auto" | "upload" | "sample"
 
-    with st.sidebar:
-        st.header("Inputs")
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### 📍 Field Setup")
 
-        # Shelby County Demo Button
-        if st.button("Load Shelby County Demo", type="primary"):
-            st.session_state.demo_loaded = True
-            st.rerun()
+    if st.button("🗺️ Load Shelby County Demo", type="primary", use_container_width=True):
+        st.session_state.demo_loaded = True
+        st.rerun()
 
-        boundary_file = st.file_uploader(
-            "Upload field boundary GeoJSON or zipped shapefile",
-            type=["geojson", "json", "zip"],
-            help="Use GeoJSON directly or upload a zipped shapefile bundle.",
+    boundary_file = st.file_uploader(
+        "Upload field boundary",
+        type=["geojson", "json", "zip", "kml"],
+        help="GeoJSON, zipped shapefile, or KML accepted.",
+    )
+
+    st.divider()
+    st.markdown("### 🛰️ NDVI Source")
+
+    ndvi_mode = st.radio(
+        "How to get NDVI?",
+        options=["Auto (Sentinel-2 API)", "Upload GeoTIFF", "Use sample data"],
+        index=0,
+    )
+
+    # Date window selector — only shown in Auto mode
+    if ndvi_mode == "Auto (Sentinel-2 API)":
+        st.session_state.ndvi_source = "auto"
+        ndvi_window = st.selectbox(
+            "NDVI time window",
+            options=["Last 7 days", "Last 14 days", "Last 30 days", "Custom spring window"],
+            index=0,
         )
-        ndvi_file = st.file_uploader(
-            "Upload NDVI GeoTIFF",
-            type=["tif", "tiff"],
-            help="Optional. If omitted, the sample NDVI dataset will be used.",
-        )
-        dem_file = st.file_uploader(
-            "Upload DEM GeoTIFF or IMG",
-            type=["tif", "tiff", "img"],
-            help="Upload a DEM GeoTIFF (.tif) or ERDAS IMAGINE (.img) file, or omit to use the sample DEM.",
-        )
+        if ndvi_window == "Custom spring window":
+            ndvi_year = st.slider("Year", 2021, datetime.now().year, datetime.now().year)
+            ndvi_start = st.text_input("Start (MM-DD)", value="03-01")
+            ndvi_end   = st.text_input("End (MM-DD)",   value="04-20")
+        else:
+            ndvi_year  = None
+            ndvi_start = None
+            ndvi_end   = None
 
-        st.markdown("---")
-        st.subheader("Editable thresholds")
-        ndvi_threshold = st.slider(
-            "Low cover NDVI threshold",
-            min_value=0.0,
-            max_value=1.0,
-            value=float(DEFAULT_THRESHOLDS["ndvi_low"]),
-            step=0.01,
-        )
-        slope_threshold = st.slider(
-            "Steep slope threshold (%)",
-            min_value=0.0,
-            max_value=30.0,
-            value=float(DEFAULT_THRESHOLDS["slope_steep"]),
-            step=0.5,
-        )
+        # Year-over-year comparison
+        yoy_compare = st.checkbox("📈 Year-over-year comparison (2023–present)")
 
-        st.markdown("---")
-        st.subheader("Visualization")
-        ndvi_opacity = st.slider(
-            "NDVI overlay opacity",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.6,
-            step=0.1,
-        )
-        slope_opacity = st.slider(
-            "Slope overlay opacity",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.4,
-            step=0.1,
-        )
-
-    temp_dir = Path(tempfile.mkdtemp())
-    boundary_path = None
-    ndvi_path = None
-    dem_path = None
-
-    # Handle demo mode
-    if st.session_state.demo_loaded:
-        boundary_path = sample_paths["boundary"]
-        ndvi_path = sample_paths["ndvi"]
-        dem_path = sample_paths["dem"]
-        st.info("Shelby County demo loaded. Using synthetic field data.")
+    elif ndvi_mode == "Upload GeoTIFF":
+        st.session_state.ndvi_source = "upload"
+        ndvi_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"])
     else:
-        if boundary_file is not None:
-            boundary_path = save_uploaded_file(boundary_file, temp_dir)
-            st.write(f"Uploaded file saved to: {boundary_path}")
-        else:
-            st.write("No boundary file uploaded, using sample.")
+        st.session_state.ndvi_source = "sample"
+        ndvi_file = None
 
-        if ndvi_file is not None:
-            ndvi_path = save_uploaded_file(ndvi_file, temp_dir)
-        else:
+    st.divider()
+    st.markdown("### 🏔️ DEM")
+    dem_file = st.file_uploader(
+        "Upload DEM GeoTIFF (optional)",
+        type=["tif", "tiff", "img"],
+        help="Leave blank to use the 3m Iowa sample DEM.",
+    )
+
+    st.divider()
+    st.markdown("### ⚙️ Thresholds")
+    ndvi_threshold  = st.slider("Low cover NDVI", 0.0, 1.0, float(DEFAULT_THRESHOLDS["ndvi_low"]),  0.01)
+    slope_threshold = st.slider("Steep slope (%)", 0.0, 30.0, float(DEFAULT_THRESHOLDS["slope_steep"]), 0.5)
+
+    st.divider()
+    st.markdown("### 🗺️ Map Overlays")
+    ndvi_opacity  = st.slider("NDVI opacity",  0.0, 1.0, 0.6, 0.1)
+    slope_opacity = st.slider("Slope opacity", 0.0, 1.0, 0.4, 0.1)
+
+# ---------------------------------------------------------------------------
+# Temp dir and sample data
+# ---------------------------------------------------------------------------
+temp_dir     = Path(tempfile.mkdtemp())
+data_dir     = Path(__file__).parent / "data"
+sample_paths = ensure_sample_data(data_dir)
+
+boundary_path = None
+ndvi_path     = None
+dem_path      = None
+ndvi_array    = None
+ndvi_transform = None
+ndvi_profile   = None
+
+# ---------------------------------------------------------------------------
+# Boundary resolution
+# ---------------------------------------------------------------------------
+if st.session_state.demo_loaded:
+    boundary_path = sample_paths["boundary"]
+    st.info("🗺️ Shelby County demo loaded — synthetic field data active.")
+elif boundary_file is not None:
+    boundary_path = save_uploaded_file(boundary_file, temp_dir)
+else:
+    boundary_path = sample_paths["field"]
+
+# DEM resolution
+dem_path = save_uploaded_file(dem_file, temp_dir) if dem_file else sample_paths["dem"]
+
+# ---------------------------------------------------------------------------
+# Load boundary
+# ---------------------------------------------------------------------------
+progress = st.progress(0)
+status   = st.empty()
+
+try:
+    status.text("Loading field boundary...")
+    progress.progress(10)
+    field_boundary = load_boundary_file(boundary_path)
+except Exception as exc:
+    st.error(f"Could not load field boundary: {exc}")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# NDVI acquisition — Auto (Sentinel-2) or Upload or Sample
+# ---------------------------------------------------------------------------
+status.text("Acquiring NDVI data...")
+progress.progress(25)
+
+if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
+    if not SENTINEL_AVAILABLE:
+        st.warning(
+            "⚠️ Sentinel-2 module not loaded. Check that `src/sentinel_utils.py` "
+            "and `src/ndvi_scheduler.py` are present."
+        )
+        ndvi_path = sample_paths["ndvi"]
+    else:
+        try:
+            token = get_token_from_streamlit_secrets()
+
+            if ndvi_window == "Custom spring window":
+                # Custom spring pull
+                ndvi_array, ndvi_transform, ndvi_profile = fetch_ndvi_for_field(
+                    boundary_gdf=field_boundary,
+                    token=token,
+                    year=ndvi_year,
+                    spring_start=ndvi_start,
+                    spring_end=ndvi_end,
+                )
+                st.success(f"✅ Sentinel-2 NDVI pulled | {ndvi_year} {ndvi_start}–{ndvi_end}")
+            else:
+                # Rolling window — auto-widens on cloud cover
+                days_map = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
+                ref_date = datetime.utcnow()
+
+                ndvi_array, ndvi_transform, ndvi_profile, meta = fetch_best_available_ndvi(
+                    boundary_gdf=field_boundary,
+                    token=token,
+                    reference_date=ref_date,
+                )
+                st.success(meta["message"])
+
+            # Year-over-year comparison chart
+            if yoy_compare:
+                with st.spinner("Pulling year-over-year NDVI (this takes ~30s)..."):
+                    current_year = datetime.now().year
+                    yoy_years = list(range(2023, current_year + 1))
+                    yoy_results = fetch_ndvi_comparison(
+                        boundary_gdf=field_boundary,
+                        token=token,
+                        years=yoy_years,
+                    )
+                    yoy_rows = []
+                    for yr, data in yoy_results.items():
+                        if "error" not in data:
+                            yoy_rows.append({"Year": yr, "Mean NDVI": round(data["mean_ndvi"], 3)})
+                    if yoy_rows:
+                        yoy_df = pd.DataFrame(yoy_rows)
+                        fig_yoy = px.bar(
+                            yoy_df, x="Year", y="Mean NDVI",
+                            title="Early-Season NDVI Trend (March–April)",
+                            color="Mean NDVI",
+                            color_continuous_scale="RdYlGn",
+                            text="Mean NDVI",
+                        )
+                        fig_yoy.update_layout(
+                            plot_bgcolor="#0e1117",
+                            paper_bgcolor="#0e1117",
+                            font_color="#c9d1d9",
+                        )
+                        st.subheader("📈 Year-over-Year NDVI Trend")
+                        st.plotly_chart(fig_yoy, use_container_width=True)
+
+        except Exception as exc:
+            st.warning(f"Sentinel-2 API unavailable: {exc}. Falling back to sample NDVI.")
             ndvi_path = sample_paths["ndvi"]
 
-        if dem_file is not None:
-            dem_path = save_uploaded_file(dem_file, temp_dir)
-        else:
-            dem_path = sample_paths["dem"]
+else:
+    # Upload or sample mode
+    if ndvi_mode == "Upload GeoTIFF" and ndvi_file is not None:
+        ndvi_path = save_uploaded_file(ndvi_file, temp_dir)
+    else:
+        ndvi_path = sample_paths["ndvi"]
 
-    # Progress bar for processing
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+# ---------------------------------------------------------------------------
+# Clip rasters
+# ---------------------------------------------------------------------------
+try:
+    status.text("Clipping NDVI raster...")
+    progress.progress(40)
 
-    try:
-        status_text.text("Loading field boundary...")
-        progress_bar.progress(10)
-        field_boundary = load_boundary_file(boundary_path)
-        st.write(f"Successfully loaded boundary with {len(field_boundary)} features.")
-    except Exception as exc:
-        st.error(f"Unable to load field boundary: {exc}")
-        st.write("Please check that your ZIP contains a valid shapefile (.shp) with companion files (.shx, .dbf).")
-        return
-
-    try:
-        status_text.text("Clipping NDVI raster...")
-        progress_bar.progress(30)
+    # If ndvi_array already populated from API, skip file clip
+    if ndvi_array is None:
         ndvi_array, ndvi_transform, ndvi_profile = clip_raster_to_geometry(
             ndvi_path, field_boundary
         )
-    except Exception as exc:
-        st.error(f"Unable to clip NDVI raster: {exc}")
-        return
+except Exception as exc:
+    st.error(f"Could not clip NDVI: {exc}")
+    st.stop()
 
-    try:
-        status_text.text("Clipping DEM raster...")
-        progress_bar.progress(50)
-        dem_array, dem_transform, dem_profile = clip_raster_to_geometry(
-            dem_path, field_boundary
-        )
-    except Exception as exc:
-        st.error(f"Unable to clip DEM raster: {exc}")
-        return
+try:
+    status.text("Clipping DEM raster...")
+    progress.progress(55)
+    dem_array, dem_transform, dem_profile = clip_raster_to_geometry(dem_path, field_boundary)
+except Exception as exc:
+    st.error(f"Could not clip DEM: {exc}")
+    st.stop()
 
-    # FIX 1 & 2 & 3: Corrected indentation, removed redundant import, and replaced
-    # dem_transform.bounds (invalid on Affine) with rasterio.transform.array_bounds()
-    if ndvi_profile.get('crs') != dem_profile.get('crs'):
-        st.warning("CRS mismatch between NDVI and DEM. Reprojecting DEM to match NDVI.")
-        left, bottom, right, top = array_bounds(
-            dem_profile['height'], dem_profile['width'], dem_transform
-        )
-        transform, width, height = calculate_default_transform(
-            dem_profile['crs'], ndvi_profile['crs'],
-            dem_profile['width'], dem_profile['height'],
-            left, bottom, right, top
-        )
-        dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
-        reproject(
-            source=dem_array,
-            destination=dem_reproj,
-            # FIX 4: use the clipped dem_transform, not dem_profile['transform']
-            src_transform=dem_transform,
-            src_crs=dem_profile['crs'],
-            dst_transform=transform,
-            dst_crs=ndvi_profile['crs'],
-            # FIX 5: bilinear is more accurate than nearest for continuous slope surface
-            resampling=Resampling.bilinear,
-        )
-        dem_array = dem_reproj
-        dem_transform = transform
-
-    status_text.text("Computing slope...")
-    progress_bar.progress(70)
-    slope_percent = compute_slope_from_dem(dem_array, dem_transform)
-
-    if ndvi_array.shape != slope_percent.shape:
-        st.info(f"Resampling slope from {slope_percent.shape} to match NDVI {ndvi_array.shape}...")
-        slope_resampled = np.empty(ndvi_array.shape, dtype=slope_percent.dtype)
-        reproject(
-            source=slope_percent,
-            destination=slope_resampled,
-            src_transform=dem_transform,
-            dst_transform=ndvi_transform,
-            src_crs=dem_profile.get('crs'),
-            dst_crs=ndvi_profile.get('crs'),
-            # FIX 5 (continued): bilinear for slope resampling here too
-            resampling=Resampling.bilinear,
-        )
-        slope_percent = slope_resampled
-
-    status_text.text("Building map...")
-    progress_bar.progress(90)
-    folium_map = build_map_with_rasters(
-        field_boundary,
-        ndvi_array,
-        slope_percent,
-        ndvi_transform,
-        ndvi_profile.get('crs'),
-        ndvi_opacity,
-        slope_opacity,
+# ---------------------------------------------------------------------------
+# CRS alignment
+# ---------------------------------------------------------------------------
+if ndvi_profile.get("crs") != dem_profile.get("crs"):
+    st.warning("CRS mismatch — reprojecting DEM to match NDVI.")
+    left, bottom, right, top = array_bounds(
+        dem_profile["height"], dem_profile["width"], dem_transform
     )
-    st.components.v1.html(folium_map._repr_html_(), height=500)
-
-    progress_bar.progress(100)
-    status_text.text("Processing complete.")
-    progress_bar.empty()
-    status_text.empty()
-
-    st.subheader("Raster inputs")
-    st.write(f"NDVI source: `{Path(ndvi_path).name}`")
-    st.write(f"DEM source: `{Path(dem_path).name}`")
-
-    ndvi_stats = raster_stats(ndvi_array, ndvi_profile.get("nodata"))
-    slope_stats = raster_stats(slope_percent)
-
-    risk_result = score_erosion_concern(
-        ndvi_mean=ndvi_stats["mean"],
-        slope_mean=slope_stats["mean"],
-        ndvi_threshold=ndvi_threshold,
-        slope_threshold=slope_threshold,
+    transform_new, width_new, height_new = calculate_default_transform(
+        dem_profile["crs"], ndvi_profile["crs"],
+        dem_profile["width"], dem_profile["height"],
+        left, bottom, right, top,
     )
-
-    # Color-code erosion concern
-    concern_color = {"Low": "normal", "Medium": "off", "High": "inverse"}.get(risk_result["concern_level"], "normal")
-
-    st.subheader("Field summary metrics")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("NDVI mean", f"{ndvi_stats['mean']:.3f}")
-    col2.metric("NDVI min", f"{ndvi_stats['min']:.3f}")
-    col3.metric("NDVI max", f"{ndvi_stats['max']:.3f}")
-    col4.metric("Slope mean (%)", f"{slope_stats['mean']:.2f}")
-    col5.metric("Erosion concern", risk_result["concern_level"], delta_color=concern_color)
-
-    # C-factor proxy
-    c_factor = calculate_c_factor(ndvi_stats["mean"])
-    st.metric("C-factor proxy (RUSLE)", f"{c_factor:.3f}", help="Estimated soil erodibility factor from NDVI.")
-
-    # NDVI freshness warning
-    if ndvi_stats["mean"] > 0.75:
-        st.warning("⚠️ NDVI values suggest mature crops. This may not reflect early-season cover crop effectiveness.")
-
-    zone_summary = zone_risk_summary(
-        ndvi_array,
-        slope_percent,
-        ndvi_threshold=ndvi_threshold,
-        slope_threshold=slope_threshold,
+    dem_reproj = np.empty((height_new, width_new), dtype=dem_array.dtype)
+    reproject(
+        source=dem_array, destination=dem_reproj,
+        src_transform=dem_transform, src_crs=dem_profile["crs"],
+        dst_transform=transform_new, dst_crs=ndvi_profile["crs"],
+        resampling=Resampling.bilinear,
     )
+    dem_array     = dem_reproj
+    dem_transform = transform_new
 
-    st.subheader("Zone risk summary")
-    st.dataframe(zone_summary, use_container_width=True)
+# ---------------------------------------------------------------------------
+# Slope computation
+# ---------------------------------------------------------------------------
+status.text("Computing slope...")
+progress.progress(70)
+slope_percent = compute_slope_from_dem(dem_array, dem_transform)
 
-    st.subheader("Risk by zone")
-    zone_chart = build_zone_risk_chart(zone_summary)
-    st.plotly_chart(zone_chart, use_container_width=True)
+if ndvi_array.shape != slope_percent.shape:
+    slope_resampled = np.empty(ndvi_array.shape, dtype=slope_percent.dtype)
+    reproject(
+        source=slope_percent, destination=slope_resampled,
+        src_transform=dem_transform, dst_transform=ndvi_transform,
+        src_crs=dem_profile.get("crs"), dst_crs=ndvi_profile.get("crs"),
+        resampling=Resampling.bilinear,
+    )
+    slope_percent = slope_resampled
 
-    # NRCS EQIP Ready Badge
-    st.success("✅ NRCS EQIP Ready: Field meets basic data requirements for conservation planning.")
+# ---------------------------------------------------------------------------
+# Map
+# ---------------------------------------------------------------------------
+status.text("Building map...")
+progress.progress(85)
+folium_map = build_map_with_rasters(
+    field_boundary, ndvi_array, slope_percent,
+    ndvi_transform, ndvi_profile.get("crs"),
+    ndvi_opacity, slope_opacity,
+)
 
-    report_df = pd.DataFrame(
-        [
-            {
-                "metric": "NDVI mean",
-                "value": ndvi_stats["mean"],
-            },
-            {
-                "metric": "NDVI min",
-                "value": ndvi_stats["min"],
-            },
-            {
-                "metric": "NDVI max",
-                "value": ndvi_stats["max"],
-            },
-            {
-                "metric": "Slope mean (%)",
-                "value": slope_stats["mean"],
-            },
-            {
-                "metric": "Erosion concern",
-                "value": risk_result["concern_level"],
-            },
-            {
-                "metric": "C-factor proxy",
-                "value": c_factor,
-            },
-        ]
+progress.progress(100)
+status.empty()
+progress.empty()
+
+st.subheader("🗺️ Field Risk Map")
+st.components.v1.html(folium_map._repr_html_(), height=520)
+
+# ---------------------------------------------------------------------------
+# Stats and scoring
+# ---------------------------------------------------------------------------
+ndvi_stats  = raster_stats(ndvi_array, ndvi_profile.get("nodata"))
+slope_stats = raster_stats(slope_percent)
+risk_result = score_erosion_concern(
+    ndvi_mean=ndvi_stats["mean"],
+    slope_mean=slope_stats["mean"],
+    ndvi_threshold=ndvi_threshold,
+    slope_threshold=slope_threshold,
+)
+
+# Concern badge
+badge_class = f"badge-{risk_result['concern_level'].lower()}"
+st.markdown(
+    f"### Erosion Concern: "
+    f"<span class='{badge_class}'>{risk_result['concern_level']}</span>",
+    unsafe_allow_html=True,
+)
+
+# Recommendation box
+concern_colors = {
+    "Low": "✅", "Moderate": "⚠️", "High": "🔴", "Critical": "🚨"
+}
+icon = concern_colors.get(risk_result["concern_level"], "ℹ️")
+st.info(f"{icon} **NRCS Advisory:** {risk_result['recommendation']}")
+
+# ---------------------------------------------------------------------------
+# Metrics row
+# ---------------------------------------------------------------------------
+st.subheader("📊 Field Summary")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("NDVI Mean",      f"{ndvi_stats['mean']:.3f}")
+c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
+c3.metric("NDVI Max",       f"{ndvi_stats['max']:.3f}")
+c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.2f}")
+c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
+          help="RUSLE C-factor from Iowa lookup table. Lower = better cover.")
+c6.metric("RUSLE C×LS",     f"{risk_result['rusle_score']:.3f}",
+          help="Combined erosion index. >0.7 = Moderate, >1.5 = High.")
+
+# NDVI freshness warning
+if ndvi_stats["mean"] > 0.75:
+    st.warning(
+        "⚠️ High NDVI may indicate mature cash crops rather than cover crops. "
+        "Verify image date — early spring pull recommended for accurate assessment."
     )
 
-    csv_bytes = report_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Download summary report as CSV",
-        data=csv_bytes,
-        file_name="erosion_report.csv",
-        mime="text/csv",
-    )
+# ---------------------------------------------------------------------------
+# C-factor species comparison chart
+# ---------------------------------------------------------------------------
+st.subheader("🌱 C-Factor vs Iowa Cover Crop Targets")
+species_df = pd.DataFrame([
+    {"Species": k, "C-Factor Target": v, "Type": "Target"}
+    for k, v in SPECIES_C_TARGETS.items()
+])
+species_df = pd.concat([
+    species_df,
+    pd.DataFrame([{"Species": "⬅ This Field", "C-Factor Target": risk_result["c_factor"], "Type": "Field"}])
+], ignore_index=True)
 
-    st.markdown("---")
-    st.info(
-        "This prototype is rule-based. Future work can connect Sentinel-2 ingestion, cloud masking, "
-        "DEM processing, and calibration against RUSLE / WEPP field data."
-    )
+fig_species = px.bar(
+    species_df, x="C-Factor Target", y="Species",
+    orientation="h",
+    color="Type",
+    color_discrete_map={"Target": "#1f6feb", "Field": "#f78166"},
+    title="Field C-Factor vs Iowa Species Benchmarks (lower = better cover)",
+)
+fig_species.update_layout(
+    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
+    font_color="#c9d1d9", showlegend=False,
+)
+st.plotly_chart(fig_species, use_container_width=True)
 
+# ---------------------------------------------------------------------------
+# Zone risk summary
+# ---------------------------------------------------------------------------
+zone_summary = zone_risk_summary(
+    ndvi_array, slope_percent,
+    ndvi_threshold=ndvi_threshold,
+    slope_threshold=slope_threshold,
+)
+st.subheader("📋 Zone Risk Summary")
+st.dataframe(zone_summary, use_container_width=True)
 
-if __name__ == "__main__":
-    main()
+zone_chart = build_zone_risk_chart(zone_summary)
+zone_chart.update_layout(
+    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#c9d1d9"
+)
+st.plotly_chart(zone_chart, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# NRCS EQIP badge
+# ---------------------------------------------------------------------------
+st.success("✅ NRCS EQIP Ready — field data meets basic conservation planning requirements.")
+
+# ---------------------------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------------------------
+report_df = pd.DataFrame([
+    {"Metric": "NDVI Mean",        "Value": ndvi_stats["mean"]},
+    {"Metric": "NDVI Min",         "Value": ndvi_stats["min"]},
+    {"Metric": "NDVI Max",         "Value": ndvi_stats["max"]},
+    {"Metric": "Slope Mean (%)",   "Value": slope_stats["mean"]},
+    {"Metric": "C-Factor (RUSLE)", "Value": risk_result["c_factor"]},
+    {"Metric": "LS-Factor",        "Value": risk_result["ls_factor"]},
+    {"Metric": "RUSLE C×LS Score", "Value": risk_result["rusle_score"]},
+    {"Metric": "Erosion Concern",  "Value": risk_result["concern_level"]},
+    {"Metric": "Recommendation",   "Value": risk_result["recommendation"]},
+])
+st.download_button(
+    label="⬇️ Download NRCS Report (CSV)",
+    data=report_df.to_csv(index=False).encode("utf-8"),
+    file_name="erosion_report_nrcs.csv",
+    mime="text/csv",
+    use_container_width=True,
+)
+
+st.divider()
+st.caption(
+    "Cover Crop Erosion Viewer · Stephen Zimmerman CCA MS · Ankeny IA · "
+    "Sentinel-2 L2A via Copernicus Data Space · Iowa RUSLE C-factor calibration"
+)
