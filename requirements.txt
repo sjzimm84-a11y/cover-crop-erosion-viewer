@@ -10,3 +10,4 @@ pydeck>=0.8
 folium>=0.14
 matplotlib>=3.5
 Pillow>=9.0
+requests>=2.31
