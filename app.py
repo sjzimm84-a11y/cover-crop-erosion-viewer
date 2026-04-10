@@ -173,22 +173,24 @@ def main() -> None:
     # Handle CRS mismatch if needed
     if ndvi_profile.get('crs') != dem_profile.get('crs'):
         st.warning("CRS mismatch between NDVI and DEM. Reprojecting DEM to match NDVI.")
-        from rasterio.warp import calculate_default_transform, reproject
-        transform, width, height = calculate_default_transform(
-            dem_profile['crs'], ndvi_profile['crs'], dem_profile['width'], dem_profile['height'], *dem_profile['transform'].bounds
-        )
-        dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
-        reproject(
-            source=dem_array,
-            destination=dem_reproj,
-            src_transform=dem_profile['transform'],
-            src_crs=dem_profile['crs'],
-            dst_transform=transform,
-            dst_crs=ndvi_profile['crs'],
-            resampling=Resampling.nearest
-        )
-        dem_array = dem_reproj
-        dem_transform = transform
+    from rasterio.warp import calculate_default_transform, reproject
+    transform, width, height = calculate_default_transform(
+        dem_profile['crs'], ndvi_profile['crs'], 
+        dem_profile['width'], dem_profile['height'], 
+        *dem_profile['transform'].bounds   # ← THIS IS CORRECT!
+    )
+    dem_reproj = np.empty((height, width), dtype=dem_array.dtype)
+    reproject(
+        source=dem_array,
+        destination=dem_reproj,
+        src_transform=dem_profile['transform'],
+        src_crs=dem_profile['crs'],
+        dst_transform=transform,
+        dst_crs=ndvi_profile['crs'],
+        resampling=Resampling.nearest  # bilinear better for slope
+    )
+    dem_array = dem_reproj    # Good!
+    dem_transform = transform # Good!
 
     status_text.text("Computing slope...")
     progress_bar.progress(70)
