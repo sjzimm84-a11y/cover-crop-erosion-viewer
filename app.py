@@ -140,7 +140,13 @@ def main() -> None:
     # Progress bar for processing
     progress_bar = st.progress(0)
     status_text = st.empty()
+# DEBUG: Check boundary_path before load_boundary_file
+if boundary_path is None:
+    st.error("🚨 No boundary file path. Demo/sample failed.")
+    st.stop()
 
+st.write(f"Loading boundary: {boundary_path}")  # Shows actual path
+st.write(f"Type: {type(boundary_path)}")        # Confirms str/Path
     try:
         status_text.text("Loading field boundary...")
         progress_bar.progress(10)
