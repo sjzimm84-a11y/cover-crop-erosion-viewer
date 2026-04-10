@@ -64,7 +64,8 @@ def build_map_with_rasters(
         # Stretch to actual data range — key fix for flat visualization
         p2  = float(np.percentile(valid_pixels, 2))
         p98 = float(np.percentile(valid_pixels, 98))
-        stretch = max(p98 - p2, 0.05)   # minimum 0.05 range to avoid divide-by-zero
+        stretch = max(p98 - p2, 0.01)   # minimum 0.05 range to avoid divide-by-zero
+	p2 = p2 - (stretch * 0.1)   # expand lower end slightly
 
         ndvi_norm = np.where(
             np.isnan(ndvi_clean),
