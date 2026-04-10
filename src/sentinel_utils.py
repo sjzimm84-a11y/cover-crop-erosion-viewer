@@ -139,12 +139,15 @@ NDVI_EVALSCRIPT = """
 //VERSION=3
 function setup() {
   return {
-    input: [{ bands: ["B04", "B08", "SCL"], units: "REFLECTANCE" }],
+    input: [{
+      bands: ["B04", "B08", "SCL"],
+      units: ["REFLECTANCE", "REFLECTANCE", "DN"]
+    }],
     output: { bands: 1, sampleType: "FLOAT32" }
   };
 }
 function evaluatePixel(s) {
-  // Cloud / shadow mask using Scene Classification Layer
+  // Cloud/shadow/snow mask via SCL (DN units: 3=shadow,8=cloud med,9=cloud high,10=cirrus,11=snow)
   if ([3,8,9,10,11].includes(s.SCL[0])) return [-9999];
   let ndvi = (s.B08[0] - s.B04[0]) / (s.B08[0] + s.B04[0] + 1e-10);
   return [ndvi];

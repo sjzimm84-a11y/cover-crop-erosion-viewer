@@ -195,7 +195,7 @@ ndvi_profile   = None
 # Boundary resolution
 # ---------------------------------------------------------------------------
 if st.session_state.demo_loaded:
-    boundary_path = sample_paths["boundary"]
+    boundary_path = sample_paths["field"]
     st.info("🗺️ Shelby County demo loaded — synthetic field data active.")
 elif boundary_file is not None:
     boundary_path = save_uploaded_file(boundary_file, temp_dir)
