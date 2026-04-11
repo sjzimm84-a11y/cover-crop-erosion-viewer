@@ -21,12 +21,18 @@ def build_map_with_rasters(
     raster_crs: Any,
     ndvi_opacity: float = 0.6,
     slope_opacity: float = 0.4,
+    zoom_start: int = 15,
 ) -> folium.Map:
     boundary_ll = boundary.to_crs("EPSG:4326")
     bounds = boundary_ll.total_bounds
     center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
 
-    m = folium.Map(location=center, zoom_start=15, tiles="CartoDB dark_matter")
+    m = folium.Map(
+        location=center,
+        zoom_start=zoom_start,
+        tiles="CartoDB dark_matter",
+        prefer_canvas=True,
+    )
 
     GeoJson(
         boundary_ll.__geo_interface__,
@@ -43,7 +49,7 @@ def build_map_with_rasters(
     sw = [raster_bounds_ll[1], raster_bounds_ll[0]]
     ne = [raster_bounds_ll[3], raster_bounds_ll[2]]
 
-    # NDVI overlay: RdYlGn (red=low cover, green=good)
+    # --- NDVI: RdYlGn (red=low cover, green=good) ---
     ndvi_clean = ndvi_array.copy().astype(float)
     ndvi_clean[ndvi_clean <= -9999] = np.nan
     valid_pixels = ndvi_clean[~np.isnan(ndvi_clean)]
@@ -73,7 +79,8 @@ def build_map_with_rasters(
     ndvi_pil.save(ndvi_buffer, format="PNG")
     ndvi_url = "data:image/png;base64," + base64.b64encode(ndvi_buffer.getvalue()).decode()
 
-    # Slope overlay: YlOrRd
+    # --- Slope: RdYlBu reversed (dark red=steep, blue=flat) ---
+    # Higher contrast than YlOrRd — agronomically steep slopes show as red
     slope_clean = slope_array.copy().astype(float)
     slope_clean[slope_clean <= -9999] = np.nan
     slope_valid = slope_clean[~np.isnan(slope_clean)]
@@ -87,8 +94,13 @@ def build_map_with_rasters(
             np.nan,
             np.clip((slope_clean - s2) / s_stretch, 0.0, 1.0),
         )
-        slope_norm_safe = np.sqrt(np.where(np.isnan(slope_norm), 0.0, slope_norm))
-        slope_rgba = plt.cm.YlOrRd(slope_norm_safe)
+        # Power curve >1 pushes more pixels into the visible range
+        # making gentle slopes visible not just steep ones
+        slope_norm_safe = np.power(
+            np.where(np.isnan(slope_norm), 0.0, slope_norm), 0.4
+        )
+        # RdYlBu_r: steep=dark red, moderate=yellow, flat=blue
+        slope_rgba = plt.cm.RdYlBu_r(slope_norm_safe)
         slope_rgba[np.isnan(slope_clean), 3] = 0.0
         slope_rgba[~np.isnan(slope_clean), 3] = slope_opacity
         slope_img = (slope_rgba * 255).astype(np.uint8)
@@ -109,22 +121,23 @@ def build_map_with_rasters(
 
     folium.raster_layers.ImageOverlay(
         image=slope_url, bounds=[sw, ne], opacity=1.0,
-        name="Slope (darker=steeper)", show=True,
+        name="Slope (red=steep, blue=flat)", show=True,
     ).add_to(m)
 
     colorbar_html = """
     <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
-        background:rgba(14,17,23,0.85);padding:10px 14px;
+        background:rgba(14,17,23,0.88);padding:12px 16px;
         border-radius:8px;border:1px solid #30363d;
         font-family:monospace;font-size:12px;color:#c9d1d9;">
-        <b>NDVI Cover Quality</b><br>
-        <span style="color:#d73027;">&#9632;</span> Low cover (reseed)<br>
+        <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
+        <span style="color:#d73027;">&#9632;</span> Low cover — reseed target<br>
         <span style="color:#fee08b;">&#9632;</span> Marginal stand<br>
         <span style="color:#1a9850;">&#9632;</span> Good cover<br>
         <hr style="border-color:#30363d;margin:6px 0;">
-        <b>Slope</b><br>
-        <span style="color:#bd0026;">&#9632;</span> Steep &nbsp;
-        <span style="color:#ffffb2;">&#9632;</span> Flat
+        <b style="color:#79c0ff;">Slope</b><br>
+        <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
+        <span style="color:#ffffbf;">&#9632;</span> Moderate &nbsp;
+        <span style="color:#4575b4;">&#9632;</span> Flat
     </div>
     """
     m.get_root().html.add_child(folium.Element(colorbar_html))

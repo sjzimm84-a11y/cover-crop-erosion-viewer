@@ -369,10 +369,17 @@ if ndvi_array.shape != slope_percent.shape:
 # ---------------------------------------------------------------------------
 status.text("Building map...")
 progress.progress(85)
+# Preserve zoom level across reruns so sliders don't reset the map
+if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 15
+if "map_center" not in st.session_state:
+    st.session_state.map_center = None
+
 folium_map = build_map_with_rasters(
     field_boundary, ndvi_array, slope_percent,
     ndvi_transform, ndvi_profile.get("crs"),
     ndvi_opacity, slope_opacity,
+    zoom_start=st.session_state.map_zoom,
 )
 
 progress.progress(100)
@@ -380,7 +387,23 @@ status.empty()
 progress.empty()
 
 st.subheader("🗺️ Field Risk Map")
-st.components.v1.html(folium_map._repr_html_(), height=520)
+try:
+    from streamlit_folium import st_folium
+    map_data = st_folium(
+        folium_map,
+        height=520,
+        use_container_width=True,
+        returned_objects=["last_zoom", "last_center"],
+        key="field_map",
+    )
+    # Save zoom and center so next rerun starts at same position
+    if map_data and map_data.get("last_zoom"):
+        st.session_state.map_zoom = map_data["last_zoom"]
+    if map_data and map_data.get("last_center"):
+        st.session_state.map_center = map_data["last_center"]
+except ImportError:
+    # Fallback if streamlit-folium not installed
+    st.components.v1.html(folium_map._repr_html_(), height=520)
 
 # ---------------------------------------------------------------------------
 # Stats and scoring
