@@ -86,19 +86,16 @@ def build_map_with_rasters(
     slope_valid = slope_clean[~np.isnan(slope_clean)]
 
     if slope_valid.size > 0:
-        s2 = float(np.percentile(slope_valid, 2))
-        s98 = float(np.percentile(slope_valid, 98))
-        s_stretch = max(s98 - s2, 0.5)
+        # Absolute NRCS slope thresholds for Iowa (percent):
+        # 0-2% = flat (blue), 2-6% = moderate (yellow), 6-12% = steep (orange), 12%+ = critical (red)
+        SLOPE_MIN = 0.0    # flat
+        SLOPE_MAX = 15.0   # cap at 15% — anything steeper still shows max red
         slope_norm = np.where(
             np.isnan(slope_clean),
             np.nan,
-            np.clip((slope_clean - s2) / s_stretch, 0.0, 1.0),
+            np.clip((slope_clean - SLOPE_MIN) / (SLOPE_MAX - SLOPE_MIN), 0.0, 1.0),
         )
-        # Power curve >1 pushes more pixels into the visible range
-        # making gentle slopes visible not just steep ones
-        slope_norm_safe = np.power(
-            np.where(np.isnan(slope_norm), 0.0, slope_norm), 0.4
-        )
+        slope_norm_safe = np.where(np.isnan(slope_norm), 0.0, slope_norm)
         # RdYlBu_r: steep=dark red, moderate=yellow, flat=blue
         slope_rgba = plt.cm.RdYlBu_r(slope_norm_safe)
         slope_rgba[np.isnan(slope_clean), 3] = 0.0
