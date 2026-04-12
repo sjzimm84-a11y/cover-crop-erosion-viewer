@@ -64,7 +64,7 @@ def build_map_with_rasters(
             np.nan,
             np.clip((ndvi_clean - p2) / stretch, 0.0, 1.0),
         )
-        cmap_ndvi = plt.cm.RdYlGn
+        cmap_ndvi = plt.cm.viridis
         ndvi_rgba = cmap_ndvi(np.where(np.isnan(ndvi_norm), 0.0, ndvi_norm))
         ndvi_rgba[np.isnan(ndvi_norm), 3] = 0.0
         ndvi_rgba[~np.isnan(ndvi_norm), 3] = ndvi_opacity
@@ -127,9 +127,9 @@ def build_map_with_rasters(
         border-radius:8px;border:1px solid #30363d;
         font-family:monospace;font-size:12px;color:#c9d1d9;">
         <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
-        <span style="color:#d73027;">&#9632;</span> Low cover — reseed target<br>
-        <span style="color:#fee08b;">&#9632;</span> Marginal stand<br>
-        <span style="color:#1a9850;">&#9632;</span> Good cover<br>
+        <span style="color:#440154;">&#9632;</span> Low cover — reseed target<br>
+        <span style="color:#31688e;">&#9632;</span> Marginal stand<br>
+        <span style="color:#fde725;">&#9632;</span> Good cover<br>
         <hr style="border-color:#30363d;margin:6px 0;">
         <b style="color:#79c0ff;">Slope</b><br>
         <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
