@@ -18,6 +18,7 @@ def clip_raster_to_geometry(
 
         geometry = [mapping(boundary.unary_union)]
         out_image, out_transform = mask(src, geometry, crop=True, nodata=src.nodata)
+	out_image = np.where(out_image == src.nodata, np.nan, out_image)
         profile = src.profile.copy()
         profile.update(
             {
