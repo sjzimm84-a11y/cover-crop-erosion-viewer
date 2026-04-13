@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import geopandas as gpd
 
+_SENTINELHUB_IMPORT_ERROR = None
 try:
     from sentinelhub import (
         SHConfig,
@@ -37,15 +38,14 @@ try:
         DataCollection,
         MimeType,
         BBox,
-        BBoxSplitter,
         CRS,
         bbox_to_dimensions,
         MosaickingOrder,
     )
-    from sentinelhub.evalscript import EvalScript
     SENTINELHUB_AVAILABLE = True
-except ImportError:
+except Exception as _e:
     SENTINELHUB_AVAILABLE = False
+    _SENTINELHUB_IMPORT_ERROR = str(_e)
 
 # ---------------------------------------------------------------------------
 # Iowa spring window defaults
@@ -144,8 +144,7 @@ def fetch_ndvi_for_field(
     """
     if not SENTINELHUB_AVAILABLE:
         raise RuntimeError(
-            "sentinelhub package not installed. "
-            "Run: pip install sentinelhub"
+            f"sentinelhub import failed: {_SENTINELHUB_IMPORT_ERROR}"
         )
 
     # Default to current spring window
