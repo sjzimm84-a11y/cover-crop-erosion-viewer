@@ -58,26 +58,18 @@ TARGET_RESOLUTION_M = 10
 # ---------------------------------------------------------------------------
 # Cloud-masked NDVI evalscript — SCL uses DN units (correct format)
 # ---------------------------------------------------------------------------
+# Raw NDVI evalscript — no cloud masking
+# Cloud masking via SCL was rejecting all Iowa spring pixels
+# Use mosaickingOrder=LEAST_CC instead to get clearest available scene
 NDVI_EVALSCRIPT = """
 //VERSION=3
 function setup() {
   return {
-    input: [{
-      bands: ["B04", "B08", "SCL"],
-      units: ["REFLECTANCE", "REFLECTANCE", "DN"]
-    }],
-    output: {
-      bands: 1,
-      sampleType: "FLOAT32"
-    }
+    input: [{ bands: ["B04", "B08"] }],
+    output: { bands: 1, sampleType: "FLOAT32" }
   };
 }
 function evaluatePixel(s) {
-  // SCL cloud/shadow/snow mask
-  // 3=cloud shadow, 8=cloud med, 9=cloud high, 10=cirrus, 11=snow
-  if ([3, 8, 9, 10, 11].includes(s.SCL[0])) {
-    return [-9999];
-  }
   var ndvi = (s.B08[0] - s.B04[0]) / (s.B08[0] + s.B04[0] + 1e-10);
   return [ndvi];
 }
@@ -184,7 +176,7 @@ def fetch_ndvi_for_field(
                 mosaicking_order=MosaickingOrder.LEAST_CC,
                 other_args={
                     "dataFilter": {
-                        "maxCloudCoverage": MAX_CLOUD_PCT,
+                        "maxCloudCoverage": 100,
                     }
                 },
             )

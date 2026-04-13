@@ -19,12 +19,14 @@ import geopandas as gpd
 
 from src.sentinel_utils import fetch_ndvi_for_field, get_config_from_streamlit_secrets
 
-MIN_VALID_FRACTION = 0.10
+MIN_VALID_FRACTION = 0.05   # lowered — Iowa spring scenes are often partly cloudy
 
 WINDOWS = [
-    {"days": 7,  "label": "last 7 days"},
-    {"days": 14, "label": "last 14 days"},
-    {"days": 30, "label": "last 30 days"},
+    {"days": 7,   "label": "last 7 days"},
+    {"days": 14,  "label": "last 14 days"},
+    {"days": 30,  "label": "last 30 days"},
+    {"days": 60,  "label": "last 60 days"},
+    {"days": 90,  "label": "last 90 days"},
 ]
 
 
