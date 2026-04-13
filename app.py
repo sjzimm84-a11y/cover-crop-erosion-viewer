@@ -114,7 +114,7 @@ if "ndvi_source" not in st.session_state:
 with st.sidebar:
     st.markdown("### 📍 Field Setup")
 
-    if st.button("🗺️ Load Shelby County Demo", type="primary", use_container_width=True):
+    if st.button("🗺️ Load Shelby County Demo", type="primary", width='stretch'):
         st.session_state.demo_loaded = True
         st.rerun()
 
@@ -250,7 +250,7 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
             else:
                 # Rolling window — auto-widens on cloud cover
                 days_map = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
-                ref_date = datetime.utcnow()
+                ref_date = datetime.now()
 
                 ndvi_array, ndvi_transform, ndvi_profile, meta = fetch_best_available_ndvi(
                     boundary_gdf=field_boundary,
@@ -288,7 +288,7 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                             font_color="#c9d1d9",
                         )
                         st.subheader("📈 Year-over-Year NDVI Trend")
-                        st.plotly_chart(fig_yoy, use_container_width=True)
+                        st.plotly_chart(fig_yoy, width='stretch')
 
         except Exception as exc:
             st.warning(f"Sentinel-2 API unavailable: {exc}. Falling back to sample NDVI.")
@@ -402,7 +402,7 @@ try:
     map_data = st_folium(
         folium_map,
         height=520,
-        use_container_width=True,
+        width='stretch',
         returned_objects=["last_zoom", "last_center"],
         key="field_map",
     )
@@ -487,7 +487,7 @@ fig_species.update_layout(
     plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
     font_color="#c9d1d9", showlegend=False,
 )
-st.plotly_chart(fig_species, use_container_width=True)
+st.plotly_chart(fig_species, width='stretch')
 
 # ---------------------------------------------------------------------------
 # Zone risk summary
@@ -498,13 +498,13 @@ zone_summary = zone_risk_summary(
     slope_threshold=slope_threshold,
 )
 st.subheader("📋 Zone Risk Summary")
-st.dataframe(zone_summary, use_container_width=True)
+st.dataframe(zone_summary, width='stretch')
 
 zone_chart = build_zone_risk_chart(zone_summary)
 zone_chart.update_layout(
     plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#c9d1d9"
 )
-st.plotly_chart(zone_chart, use_container_width=True)
+st.plotly_chart(zone_chart, width='stretch')
 
 # ---------------------------------------------------------------------------
 # NRCS EQIP badge
@@ -530,7 +530,7 @@ st.download_button(
     data=report_df.to_csv(index=False).encode("utf-8"),
     file_name="erosion_report_nrcs.csv",
     mime="text/csv",
-    use_container_width=True,
+    width='stretch',
 )
 
 st.divider()
