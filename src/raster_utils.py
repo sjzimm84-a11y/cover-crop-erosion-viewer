@@ -18,7 +18,6 @@ def clip_raster_to_geometry(
 
         geometry = [mapping(boundary.unary_union)]
         out_image, out_transform = mask(src, geometry, crop=True, nodata=src.nodata)
-        out_image = np.where(out_image == src.nodata, np.nan, out_image)
         profile = src.profile.copy()
         profile.update(
             {
@@ -99,8 +98,6 @@ def compute_slope_from_dem(
     # Nodata (0 for Iowa DEM) → NaN before gradient
     elev[elev == 0] = np.nan
 
-    # Fill NaN edges with nearest valid value for gradient stability
-    from scipy.ndimage import generic_filter
     nan_mask = np.isnan(elev)
     if nan_mask.any() and not nan_mask.all():
         # Simple fill: replace NaN with local mean of valid neighbors
@@ -109,8 +106,13 @@ def compute_slope_from_dem(
     else:
         elev_filled = elev
 
+    # x_res and y_res are in CRS units (meters for UTM EPSG:26915)
+    # elevation is now in meters after unit conversion above
+    # so dz/dx gives m/m = dimensionless gradient, * 100 = percent
     dz_dx, dz_dy = np.gradient(elev_filled, x_res, y_res)
     slope_pct = np.hypot(dz_dx, dz_dy) * 100.0
+    # Cap at physically realistic maximum for agricultural land
+    slope_pct = np.clip(slope_pct, 0, 100)
 
     # Restore NaN where original nodata was
     slope_pct[nan_mask] = np.nan
