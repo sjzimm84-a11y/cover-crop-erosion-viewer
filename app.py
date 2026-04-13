@@ -31,12 +31,17 @@ from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.iowa_dem_utils import get_dem_with_fallback
 
 # Sentinel-2 imports — graceful fallback if credentials not yet configured
+SENTINEL_AVAILABLE = False
+SENTINEL_IMPORT_ERROR = None
 try:
-    from src.sentinel_utils import get_token_from_streamlit_secrets, fetch_ndvi_for_field
+    from src.sentinel_utils import (
+        get_config_from_streamlit_secrets,
+        fetch_ndvi_for_field,
+    )
     from src.ndvi_scheduler import fetch_best_available_ndvi, fetch_ndvi_comparison
     SENTINEL_AVAILABLE = True
-except Exception:
-    SENTINEL_AVAILABLE = False
+except Exception as _sentinel_exc:
+    SENTINEL_IMPORT_ERROR = str(_sentinel_exc)
 
 APP_TITLE       = "Cover Crop Erosion Viewer"
 APP_DESCRIPTION = (
@@ -229,22 +234,23 @@ progress.progress(25)
 if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
     if not SENTINEL_AVAILABLE:
         st.warning(
-            "⚠️ Sentinel-2 module not loaded. Check that `src/sentinel_utils.py` "
-            "and `src/ndvi_scheduler.py` are present."
+            f"⚠️ Sentinel-2 module not loaded. Error: {SENTINEL_IMPORT_ERROR}"
         )
         ndvi_path = sample_paths["ndvi"]
     else:
         try:
-            token = get_token_from_streamlit_secrets()
+            config = get_config_from_streamlit_secrets()
 
             if ndvi_window == "Custom spring window":
                 # Custom spring pull
+                from datetime import datetime as _dt
+                date_from = _dt(ndvi_year, int(ndvi_start.split('-')[0]), int(ndvi_start.split('-')[1]))
+                date_to   = _dt(ndvi_year, int(ndvi_end.split('-')[0]),   int(ndvi_end.split('-')[1]))
                 ndvi_array, ndvi_transform, ndvi_profile = fetch_ndvi_for_field(
                     boundary_gdf=field_boundary,
-                    token=token,
-                    year=ndvi_year,
-                    spring_start=ndvi_start,
-                    spring_end=ndvi_end,
+                    config=config,
+                    date_from=date_from,
+                    date_to=date_to,
                 )
                 st.success(f"✅ Sentinel-2 NDVI pulled | {ndvi_year} {ndvi_start}–{ndvi_end}")
             else:
@@ -254,7 +260,6 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
 
                 ndvi_array, ndvi_transform, ndvi_profile, meta = fetch_best_available_ndvi(
                     boundary_gdf=field_boundary,
-                    token=token,
                     reference_date=ref_date,
                 )
                 st.success(meta["message"])
@@ -266,7 +271,6 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                     yoy_years = list(range(2023, current_year + 1))
                     yoy_results = fetch_ndvi_comparison(
                         boundary_gdf=field_boundary,
-                        token=token,
                         years=yoy_years,
                     )
                     yoy_rows = []
