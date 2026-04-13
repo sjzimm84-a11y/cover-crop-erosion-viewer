@@ -28,6 +28,7 @@ from src.scoring import (
     SPECIES_C_TARGETS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
+from src.iowa_dem_utils import get_dem_with_fallback
 
 # Sentinel-2 imports — graceful fallback if credentials not yet configured
 try:
@@ -202,8 +203,8 @@ elif boundary_file is not None:
 else:
     boundary_path = sample_paths["field"]
 
-# DEM resolution
-dem_path = save_uploaded_file(dem_file, temp_dir) if dem_file else sample_paths["dem"]
+# DEM resolution — uploaded file path (used as fallback if WCS fails)
+dem_path = save_uploaded_file(dem_file, temp_dir) if dem_file else None
 
 # ---------------------------------------------------------------------------
 # Load boundary
@@ -317,11 +318,19 @@ except Exception as exc:
     st.stop()
 
 try:
-    status.text("Clipping DEM raster...")
+    status.text("Fetching DEM (Iowa 3m WCS)...")
     progress.progress(55)
-    dem_array, dem_transform, dem_profile = clip_raster_to_geometry(dem_path, field_boundary)
+    dem_array, dem_transform, dem_profile, dem_source = get_dem_with_fallback(
+        boundary_gdf=field_boundary,
+        uploaded_dem_path=dem_path,
+        sample_dem_path=sample_paths["dem"],
+    )
+    if dem_source == "Iowa 3m WCS (auto)":
+        st.success(f"🛰️ DEM auto-fetched from Iowa 3m WCS")
+    else:
+        st.info(f"📁 DEM source: {dem_source}")
 except Exception as exc:
-    st.error(f"Could not clip DEM: {exc}")
+    st.error(f"Could not load DEM: {exc}")
     st.stop()
 
 # ---------------------------------------------------------------------------
