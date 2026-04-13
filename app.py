@@ -380,6 +380,7 @@ folium_map = build_map_with_rasters(
     ndvi_transform, ndvi_profile.get("crs"),
     ndvi_opacity, slope_opacity,
     zoom_start=st.session_state.map_zoom,
+    ndvi_threshold=ndvi_threshold,
 )
 
 progress.progress(100)

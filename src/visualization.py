@@ -22,7 +22,10 @@ def build_map_with_rasters(
     ndvi_opacity: float = 0.6,
     slope_opacity: float = 0.4,
     zoom_start: int = 15,
+    ndvi_threshold: float = 0.35,
 ) -> folium.Map:
+    # Expose threshold to colormap logic below
+    ndvi_opacity_threshold = ndvi_threshold
     boundary_ll = boundary.to_crs("EPSG:4326")
     bounds = boundary_ll.total_bounds
     center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
@@ -49,31 +52,40 @@ def build_map_with_rasters(
     sw = [raster_bounds_ll[1], raster_bounds_ll[0]]
     ne = [raster_bounds_ll[3], raster_bounds_ll[2]]
 
-    # --- NDVI: RdYlGn (red=low cover, green=good) ---
+    # --- NDVI: 3-class discrete colormap tied to threshold ---
+    # Orange=low cover, Blue=marginal, Yellow=good
+    # Colors chosen for red-green colorblind accessibility
+    COLOR_LOW      = np.array([249, 115,  22, 255], dtype=np.uint8)  # #F97316 orange
+    COLOR_MARGINAL = np.array([ 56, 189, 248, 255], dtype=np.uint8)  # #38BDF8 steel blue
+    COLOR_GOOD     = np.array([250, 204,  21, 255], dtype=np.uint8)  # #FACC15 bright yellow
+    COLOR_NODATA   = np.array([  0,   0,   0,   0], dtype=np.uint8)  # transparent
+
     ndvi_clean = ndvi_array.copy().astype(float)
     ndvi_clean[ndvi_clean <= -9999] = np.nan
     valid_pixels = ndvi_clean[~np.isnan(ndvi_clean)]
 
+    ndvi_img = np.zeros((height, width, 4), dtype=np.uint8)
+
     if valid_pixels.size > 0:
-        p2 = float(np.percentile(valid_pixels, 2))
-        p98 = float(np.percentile(valid_pixels, 98))
-        stretch = max(p98 - p2, 0.01)
-        p2 = p2 - (stretch * 0.1)
-        ndvi_norm = np.where(
-            np.isnan(ndvi_clean),
-            np.nan,
-            np.clip((ndvi_clean - p2) / stretch, 0.0, 1.0),
-        )
-        cmap_ndvi = plt.cm.viridis
-        ndvi_rgba = cmap_ndvi(np.where(np.isnan(ndvi_norm), 0.0, ndvi_norm))
-        ndvi_rgba[np.isnan(ndvi_norm), 3] = 0.0
-        ndvi_rgba[~np.isnan(ndvi_norm), 3] = ndvi_opacity
-        ndvi_img = (ndvi_rgba * 255).astype(np.uint8)
-        ndvi_pil = Image.fromarray(ndvi_img, mode="RGBA")
-    else:
-        ndvi_pil = Image.fromarray(
-            np.zeros((height, width, 4), dtype=np.uint8), mode="RGBA"
-        )
+        # Marginal band = threshold to threshold+0.15
+        marginal_upper = ndvi_opacity_threshold + 0.15
+
+        low_mask      = (~np.isnan(ndvi_clean)) & (ndvi_clean < ndvi_opacity_threshold)
+        marginal_mask = (~np.isnan(ndvi_clean)) & (ndvi_clean >= ndvi_opacity_threshold) & (ndvi_clean < marginal_upper)
+        good_mask     = (~np.isnan(ndvi_clean)) & (ndvi_clean >= marginal_upper)
+        nodata_mask   = np.isnan(ndvi_clean)
+
+        ndvi_img[low_mask]      = COLOR_LOW
+        ndvi_img[marginal_mask] = COLOR_MARGINAL
+        ndvi_img[good_mask]     = COLOR_GOOD
+        ndvi_img[nodata_mask]   = COLOR_NODATA
+
+        # Apply opacity to alpha channel only
+        ndvi_img[low_mask,      3] = int(ndvi_opacity * 255)
+        ndvi_img[marginal_mask, 3] = int(ndvi_opacity * 255)
+        ndvi_img[good_mask,     3] = int(ndvi_opacity * 255)
+
+    ndvi_pil = Image.fromarray(ndvi_img, mode="RGBA")
 
     ndvi_buffer = BytesIO()
     ndvi_pil.save(ndvi_buffer, format="PNG")
@@ -127,9 +139,9 @@ def build_map_with_rasters(
         border-radius:8px;border:1px solid #30363d;
         font-family:monospace;font-size:12px;color:#c9d1d9;">
         <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
-        <span style="color:#440154;">&#9632;</span> Low cover — reseed target<br>
-        <span style="color:#31688e;">&#9632;</span> Marginal stand<br>
-        <span style="color:#fde725;">&#9632;</span> Good cover<br>
+        <span style="color:#F97316;">&#9632;</span> Low cover — reseed target<br>
+        <span style="color:#38BDF8;">&#9632;</span> Marginal stand<br>
+        <span style="color:#FACC15;">&#9632;</span> Good cover<br>
         <hr style="border-color:#30363d;margin:6px 0;">
         <b style="color:#79c0ff;">Slope</b><br>
         <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
