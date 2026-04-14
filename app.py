@@ -30,15 +30,15 @@ from src.scoring import (
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.iowa_dem_utils import get_dem_with_fallback
 
-# Sentinel-2 imports — graceful fallback if credentials not yet configured
+# GEE NDVI imports — graceful fallback if not configured
 SENTINEL_AVAILABLE = False
 SENTINEL_IMPORT_ERROR = None
 try:
-    from src.sentinel_utils import (
-        get_config_from_streamlit_secrets,
-        fetch_ndvi_for_field,
+    from src.gee_ndvi_utils import (
+        init_gee_from_streamlit_secrets,
+        fetch_ndvi_for_field as gee_fetch_ndvi,
+        fetch_ndvi_streamlit,
     )
-    from src.ndvi_scheduler import fetch_best_available_ndvi, fetch_ndvi_comparison
     SENTINEL_AVAILABLE = True
 except Exception as _sentinel_exc:
     SENTINEL_IMPORT_ERROR = str(_sentinel_exc)
@@ -234,49 +234,50 @@ progress.progress(25)
 if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
     if not SENTINEL_AVAILABLE:
         st.warning(
-            f"⚠️ Sentinel-2 module not loaded. Error: {SENTINEL_IMPORT_ERROR}"
+            f"⚠️ GEE module not loaded. Error: {SENTINEL_IMPORT_ERROR}"
         )
         ndvi_path = sample_paths["ndvi"]
     else:
         try:
-            config = get_config_from_streamlit_secrets()
+            from datetime import datetime as _dt, timedelta as _td
+
+            # Initialize GEE authentication
+            init_gee_from_streamlit_secrets()
 
             if ndvi_window == "Custom spring window":
-                # Custom spring pull
-                from datetime import datetime as _dt
                 date_from = _dt(ndvi_year, int(ndvi_start.split('-')[0]), int(ndvi_start.split('-')[1]))
                 date_to   = _dt(ndvi_year, int(ndvi_end.split('-')[0]),   int(ndvi_end.split('-')[1]))
-                ndvi_array, ndvi_transform, ndvi_profile = fetch_ndvi_for_field(
-                    boundary_gdf=field_boundary,
-                    config=config,
-                    date_from=date_from,
-                    date_to=date_to,
-                )
-                st.success(f"✅ Sentinel-2 NDVI pulled | {ndvi_year} {ndvi_start}–{ndvi_end}")
             else:
-                # Rolling window — auto-widens on cloud cover
-                days_map = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
-                ref_date = datetime.now()
+                days_map  = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
+                days_back = days_map.get(ndvi_window, 30)
+                date_to   = _dt.now()
+                # Always include at least Jan 1 of current year for Iowa spring coverage
+                date_from = _dt(date_to.year, 1, 1)
 
-                ndvi_array, ndvi_transform, ndvi_profile, meta = fetch_best_available_ndvi(
-                    boundary_gdf=field_boundary,
-                    reference_date=ref_date,
-                )
-                st.success(meta["message"])
+            ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg = fetch_ndvi_streamlit(
+                boundary_gdf=field_boundary,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            st.success(ndvi_msg)
 
             # Year-over-year comparison chart
             if yoy_compare:
-                with st.spinner("Pulling year-over-year NDVI (this takes ~30s)..."):
-                    current_year = datetime.now().year
-                    yoy_years = list(range(2023, current_year + 1))
-                    yoy_results = fetch_ndvi_comparison(
-                        boundary_gdf=field_boundary,
-                        years=yoy_years,
-                    )
+                with st.spinner("Pulling year-over-year NDVI via GEE (30-60s)..."):
+                    current_year = _dt.now().year
                     yoy_rows = []
-                    for yr, data in yoy_results.items():
-                        if "error" not in data:
-                            yoy_rows.append({"Year": yr, "Mean NDVI": round(data["mean_ndvi"], 3)})
+                    for yr in range(2023, current_year + 1):
+                        try:
+                            arr, _, _ = gee_fetch_ndvi(
+                                field_boundary,
+                                date_from=_dt(yr, 3, 1),
+                                date_to=_dt(yr, 4, 30),
+                            )
+                            valid = arr[~np.isnan(arr)]
+                            if valid.size > 0:
+                                yoy_rows.append({"Year": yr, "Mean NDVI": round(float(valid.mean()), 3)})
+                        except Exception:
+                            pass
                     if yoy_rows:
                         yoy_df = pd.DataFrame(yoy_rows)
                         fig_yoy = px.bar(
@@ -295,7 +296,7 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                         st.plotly_chart(fig_yoy, width='stretch')
 
         except Exception as exc:
-            st.warning(f"Sentinel-2 API unavailable: {exc}. Falling back to sample NDVI.")
+            st.warning(f"GEE NDVI unavailable: {exc}. Falling back to sample NDVI.")
             ndvi_path = sample_paths["ndvi"]
 
 else:
