@@ -339,10 +339,23 @@ except Exception as exc:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# CRS alignment
+# Slope computation — BEFORE reprojection while DEM is still in UTM meters
+# Critical: slope must be computed in a projected CRS (meters)
+# Computing slope after reprojection to EPSG:4326 gives wrong values
+# because pixel size would be in degrees not meters
+# ---------------------------------------------------------------------------
+status.text("Computing slope...")
+progress.progress(70)
+
+# Compute slope while DEM is in its native CRS (UTM meters from Iowa WCS)
+slope_percent = compute_slope_from_dem(dem_array, dem_transform)
+slope_crs     = dem_profile.get("crs")
+slope_transform = dem_transform
+
+# ---------------------------------------------------------------------------
+# CRS alignment — reproject both slope AND DEM to match NDVI CRS
 # ---------------------------------------------------------------------------
 if ndvi_profile.get("crs") != dem_profile.get("crs"):
-    st.warning("CRS mismatch — reprojecting DEM to match NDVI.")
     left, bottom, right, top = array_bounds(
         dem_profile["height"], dem_profile["width"], dem_transform
     )
@@ -351,6 +364,8 @@ if ndvi_profile.get("crs") != dem_profile.get("crs"):
         dem_profile["width"], dem_profile["height"],
         left, bottom, right, top,
     )
+
+    # Reproject DEM elevation (for display reference only)
     dem_reproj = np.empty((height_new, width_new), dtype=dem_array.dtype)
     reproject(
         source=dem_array, destination=dem_reproj,
@@ -361,19 +376,24 @@ if ndvi_profile.get("crs") != dem_profile.get("crs"):
     dem_array     = dem_reproj
     dem_transform = transform_new
 
-# ---------------------------------------------------------------------------
-# Slope computation
-# ---------------------------------------------------------------------------
-status.text("Computing slope...")
-progress.progress(70)
-slope_percent = compute_slope_from_dem(dem_array, dem_transform)
+    # Reproject slope — values stay correct because computed before reprojection
+    slope_reproj = np.empty((height_new, width_new), dtype=slope_percent.dtype)
+    reproject(
+        source=slope_percent, destination=slope_reproj,
+        src_transform=slope_transform, src_crs=slope_crs,
+        dst_transform=transform_new, dst_crs=ndvi_profile["crs"],
+        resampling=Resampling.bilinear,
+    )
+    slope_percent   = slope_reproj
+    slope_transform = transform_new
 
+# Final shape alignment between slope and NDVI
 if ndvi_array.shape != slope_percent.shape:
     slope_resampled = np.empty(ndvi_array.shape, dtype=slope_percent.dtype)
     reproject(
         source=slope_percent, destination=slope_resampled,
-        src_transform=dem_transform, dst_transform=ndvi_transform,
-        src_crs=dem_profile.get("crs"), dst_crs=ndvi_profile.get("crs"),
+        src_transform=slope_transform, dst_transform=ndvi_transform,
+        src_crs=ndvi_profile.get("crs"), dst_crs=ndvi_profile.get("crs"),
         resampling=Resampling.bilinear,
     )
     slope_percent = slope_resampled
