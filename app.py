@@ -30,19 +30,6 @@ from src.scoring import (
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.iowa_dem_utils import get_dem_with_fallback
 
-# === DEBUG: Show what's in secrets ===
-st.write("🔍 Secrets keys:", list(st.secrets.keys()))
-if "gee" in st.secrets:
-    st.write("✅ [gee] found!")
-    st.write("   gee keys:", list(st.secrets.gee.keys()))
-    if "project" in st.secrets.gee:
-        st.write("   ✅ project:", st.secrets.gee.project)
-    else:
-        st.write("   ❌ project NOT found in [gee]")
-else:
-    st.write("❌ [gee] section NOT found")
-# === END DEBUG ===
-
 # GEE NDVI imports — graceful fallback if not configured
 SENTINEL_AVAILABLE = False
 SENTINEL_IMPORT_ERROR = None
