@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment (ignore the whole .venv folder)
+.venv/
+venv/
+env/
+
+# Streamlit secrets (CRITICAL - never commit these!)
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
