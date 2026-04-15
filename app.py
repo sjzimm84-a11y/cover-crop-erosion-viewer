@@ -557,26 +557,72 @@ st.plotly_chart(zone_chart, width='stretch')
 st.success("✅ NRCS EQIP Ready — field data meets basic conservation planning requirements.")
 
 # ---------------------------------------------------------------------------
-# CSV export
+# Report export — PDF + CSV
 # ---------------------------------------------------------------------------
 report_df = pd.DataFrame([
     {"Metric": "NDVI Mean",        "Value": ndvi_stats["mean"]},
     {"Metric": "NDVI Min",         "Value": ndvi_stats["min"]},
     {"Metric": "NDVI Max",         "Value": ndvi_stats["max"]},
+    {"Metric": "NDVI Date From",   "Value": st.session_state.ndvi_date_from or "N/A"},
+    {"Metric": "NDVI Date To",     "Value": st.session_state.ndvi_date_to   or "N/A"},
     {"Metric": "Slope Mean (%)",   "Value": slope_stats["mean"]},
     {"Metric": "C-Factor (RUSLE)", "Value": risk_result["c_factor"]},
     {"Metric": "LS-Factor",        "Value": risk_result["ls_factor"]},
-    {"Metric": "RUSLE C×LS Score", "Value": risk_result["rusle_score"]},
+    {"Metric": "RUSLE CxLS Score", "Value": risk_result["rusle_score"]},
     {"Metric": "Erosion Concern",  "Value": risk_result["concern_level"]},
     {"Metric": "Recommendation",   "Value": risk_result["recommendation"]},
 ])
-st.download_button(
-    label="⬇️ Download NRCS Report (CSV)",
-    data=report_df.to_csv(index=False).encode("utf-8"),
-    file_name="erosion_report_nrcs.csv",
-    mime="text/csv",
-    width='stretch',
-)
+
+st.subheader("📄 Generate Field Report")
+col_a, col_b, col_c = st.columns(3)
+with col_a:
+    pdf_field_name = st.text_input("Field name", value="North Field")
+with col_b:
+    pdf_farm_name  = st.text_input("Farm name",  value="")
+with col_c:
+    pdf_county     = st.text_input("County",     value="Shelby County, IA")
+
+col_dl1, col_dl2 = st.columns(2)
+
+with col_dl1:
+    if st.button("📋 Generate PDF Report", type="primary", use_container_width=True):
+        with st.spinner("Building PDF report..."):
+            try:
+                pdf_bytes = generate_field_report(
+                    field_name=pdf_field_name or "Field",
+                    farm_name=pdf_farm_name   or "",
+                    county=pdf_county         or "Iowa",
+                    ndvi_array=ndvi_array,
+                    slope_array=slope_percent,
+                    ndvi_stats=ndvi_stats,
+                    slope_stats=slope_stats,
+                    risk_result=risk_result,
+                    zone_summary=zone_summary,
+                    ndvi_threshold=ndvi_threshold,
+                    slope_threshold=slope_threshold,
+                    ndvi_date_from=st.session_state.ndvi_date_from,
+                    ndvi_date_to=st.session_state.ndvi_date_to,
+                    dem_source=st.session_state.get("dem_source_label", "Iowa 3m WCS"),
+                )
+                st.download_button(
+                    label="⬇️ Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"erosion_report_{(pdf_field_name or 'field').replace(' ','_')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+                st.success("PDF ready — click Download above.")
+            except Exception as pdf_exc:
+                st.error(f"PDF generation failed: {pdf_exc}")
+
+with col_dl2:
+    st.download_button(
+        label="⬇️ Download CSV Data",
+        data=report_df.to_csv(index=False).encode("utf-8"),
+        file_name="erosion_report_nrcs.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 st.divider()
 st.caption(
