@@ -255,12 +255,28 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                 # Always include at least Jan 1 of current year for Iowa spring coverage
                 date_from = _dt(date_to.year, 1, 1)
 
-            ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg = fetch_ndvi_streamlit(
+            ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg, scene_meta = fetch_ndvi_streamlit(
                 boundary_gdf=field_boundary,
                 date_from=date_from,
                 date_to=date_to,
             )
             st.success(ndvi_msg)
+
+            # Store actual scene acquisition dates (not just the query window)
+            latest_scene  = scene_meta.get("latest_date")
+            earliest_scene = scene_meta.get("earliest_date")
+            scene_count   = scene_meta.get("count", 0)
+            if latest_scene:
+                st.session_state.ndvi_scene_latest  = latest_scene.strftime("%b %d, %Y")
+                st.session_state.ndvi_scene_earliest = (
+                    earliest_scene.strftime("%b %d, %Y") if earliest_scene else None
+                )
+                st.session_state.ndvi_scene_count = scene_count
+            else:
+                st.session_state.ndvi_scene_latest   = None
+                st.session_state.ndvi_scene_earliest = None
+                st.session_state.ndvi_scene_count    = scene_count
+            # Keep query-window dates for the PDF report
             st.session_state.ndvi_date_from = date_from.strftime("%b %d, %Y")
             st.session_state.ndvi_date_to   = date_to.strftime("%b %d, %Y")
 
@@ -271,7 +287,7 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                     yoy_rows = []
                     for yr in range(2023, current_year + 1):
                         try:
-                            arr, _, _ = gee_fetch_ndvi(
+                            arr, _, _, _ = gee_fetch_ndvi(
                                 field_boundary,
                                 date_from=_dt(yr, 3, 1),
                                 date_to=_dt(yr, 4, 30),
@@ -416,6 +432,12 @@ if "ndvi_date_from" not in st.session_state:
     st.session_state.ndvi_date_from = None
 if "ndvi_date_to" not in st.session_state:
     st.session_state.ndvi_date_to = None
+if "ndvi_scene_latest" not in st.session_state:
+    st.session_state.ndvi_scene_latest = None
+if "ndvi_scene_earliest" not in st.session_state:
+    st.session_state.ndvi_scene_earliest = None
+if "ndvi_scene_count" not in st.session_state:
+    st.session_state.ndvi_scene_count = None
 if "dem_source_label" not in st.session_state:
     st.session_state.dem_source_label = "Sample DEM"
 
@@ -471,14 +493,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Show NDVI collection date prominently
-if st.session_state.ndvi_date_from and st.session_state.ndvi_date_to:
+# Show actual Sentinel-2 flight/scene date(s) prominently
+_latest   = st.session_state.ndvi_scene_latest
+_earliest = st.session_state.ndvi_scene_earliest
+_count    = st.session_state.ndvi_scene_count
+if _latest:
+    if _count and _count > 1 and _earliest and _earliest != _latest:
+        _scene_label = (
+            f"Latest flight: {_latest} "
+            f"({_count} scenes composited: {_earliest} – {_latest})"
+        )
+    else:
+        _scene_label = f"Flight date: {_latest}"
+    st.caption(f"🛰️ Sentinel-2 image · {_scene_label} · via Google Earth Engine")
+elif st.session_state.ndvi_date_from and st.session_state.ndvi_date_to:
     st.caption(
         f"🛰️ NDVI collected: {st.session_state.ndvi_date_from} – "
         f"{st.session_state.ndvi_date_to} via Sentinel-2 / Google Earth Engine"
     )
-elif st.session_state.ndvi_date_to:
-    st.caption(f"🛰️ NDVI collected: {st.session_state.ndvi_date_to}")
 
 # Recommendation box
 concern_colors = {

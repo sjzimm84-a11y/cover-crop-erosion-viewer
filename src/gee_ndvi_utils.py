@@ -142,14 +142,15 @@ def fetch_ndvi_for_field(
     date_to: Optional[datetime] = None,
     scale_m: int = TARGET_SCALE_M,
     max_cloud_pct: int = MAX_CLOUD_PCT,
-) -> Tuple[np.ndarray, Any, Dict[str, Any]]:
+) -> Tuple[np.ndarray, Any, Dict[str, Any], Dict[str, Any]]:
     """
     Pull Sentinel-2 NDVI for a field boundary via GEE.
 
     Returns
     -------
-    (ndvi_array, affine_transform, profile_dict)
+    (ndvi_array, affine_transform, profile_dict, scene_meta)
     ndvi_array: float32, NaN where no data, values in [-1, 1]
+    scene_meta: {"count": int, "earliest_date": datetime|None, "latest_date": datetime|None}
     """
     if not GEE_AVAILABLE:
         raise RuntimeError(f"GEE not available: {_GEE_IMPORT_ERROR}")
@@ -184,6 +185,21 @@ def fetch_ndvi_for_field(
             f"and {date_to.strftime('%Y-%m-%d')}. "
             f"Try a wider date range."
         )
+
+    # Extract actual scene acquisition dates from the collection
+    scene_meta: Dict[str, Any] = {"count": count, "earliest_date": None, "latest_date": None}
+    try:
+        timestamps_ms = (
+            collection
+            .sort("system:time_start")
+            .aggregate_array("system:time_start")
+            .getInfo()
+        )
+        if timestamps_ms:
+            scene_meta["earliest_date"] = datetime.utcfromtimestamp(timestamps_ms[0]  / 1000)
+            scene_meta["latest_date"]   = datetime.utcfromtimestamp(timestamps_ms[-1] / 1000)
+    except Exception:
+        pass  # scene dates are informational — don't block the fetch
 
     # Median composite — robust for Iowa partly-cloudy spring conditions
     ndvi_image = collection.median().clip(aoi)
@@ -231,7 +247,7 @@ def fetch_ndvi_for_field(
             "or all scenes are fully clouded."
         )
 
-    return ndvi_raw, transform, profile
+    return ndvi_raw, transform, profile, scene_meta
 
 
 # ---------------------------------------------------------------------------
@@ -242,14 +258,15 @@ def fetch_ndvi_streamlit(
     boundary_gdf: gpd.GeoDataFrame,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
-) -> Tuple[np.ndarray, Any, Dict[str, Any], str]:
+) -> Tuple[np.ndarray, Any, Dict[str, Any], str, Dict[str, Any]]:
     """
     GEE NDVI fetch for Streamlit. Initializes auth from secrets.
-    Returns (array, transform, profile, status_message).
+    Returns (array, transform, profile, status_message, scene_meta).
+    scene_meta keys: count, earliest_date (datetime|None), latest_date (datetime|None)
     """
     init_gee_from_streamlit_secrets()
 
-    ndvi, transform, profile = fetch_ndvi_for_field(
+    ndvi, transform, profile, scene_meta = fetch_ndvi_for_field(
         boundary_gdf=boundary_gdf,
         date_from=date_from,
         date_to=date_to,
@@ -257,13 +274,27 @@ def fetch_ndvi_streamlit(
 
     valid     = ndvi[~np.isnan(ndvi)]
     valid_pct = valid.size / ndvi.size * 100 if ndvi.size > 0 else 0
-    d_from    = date_from.strftime("%b %d") if date_from else "Jan 1"
-    d_to      = date_to.strftime("%b %d, %Y") if date_to else "Today"
+
+    # Build a human-readable scene date string
+    count = scene_meta.get("count", 0)
+    latest  = scene_meta.get("latest_date")
+    earliest = scene_meta.get("earliest_date")
+    if latest and earliest and earliest.date() != latest.date():
+        scene_str = (
+            f"{count} scenes · "
+            f"{earliest.strftime('%b %d')}–{latest.strftime('%b %d, %Y')}"
+        )
+    elif latest:
+        scene_str = f"1 scene · {latest.strftime('%b %d, %Y')}"
+    else:
+        d_from = date_from.strftime("%b %d") if date_from else "Jan 1"
+        d_to   = date_to.strftime("%b %d, %Y") if date_to else "Today"
+        scene_str = f"{d_from} – {d_to}"
 
     message = (
         f"✅ Sentinel-2 NDVI via Google Earth Engine | "
-        f"{d_from} – {d_to} | "
+        f"{scene_str} | "
         f"{valid_pct:.0f}% valid pixels | "
         f"Mean NDVI: {float(np.nanmean(ndvi)):.3f}"
     )
-    return ndvi, transform, profile, message
+    return ndvi, transform, profile, message, scene_meta
