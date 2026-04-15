@@ -176,7 +176,7 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ⚙️ Thresholds")
-    ndvi_threshold  = st.slider("Low cover NDVI", 0.0, 1.0, float(DEFAULT_THRESHOLDS["ndvi_low"]),  0.01)
+    ndvi_threshold  = st.slider("Low cover NDVI", 0.0, 1.0, 0.10, 0.01)
     slope_threshold = st.slider("Steep slope (%)", 0.0, 30.0, float(DEFAULT_THRESHOLDS["slope_steep"]), 0.5)
 
     st.divider()
@@ -250,10 +250,9 @@ if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
                 date_to   = _dt(ndvi_year, int(ndvi_end.split('-')[0]),   int(ndvi_end.split('-')[1]))
             else:
                 days_map  = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
-                days_back = days_map.get(ndvi_window, 30)
+                days_back = days_map.get(ndvi_window, 7)
                 date_to   = _dt.now()
-                # Always include at least Jan 1 of current year for Iowa spring coverage
-                date_from = _dt(date_to.year, 1, 1)
+                date_from = date_to - _td(days=days_back)
 
             ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg, scene_meta = fetch_ndvi_streamlit(
                 boundary_gdf=field_boundary,
