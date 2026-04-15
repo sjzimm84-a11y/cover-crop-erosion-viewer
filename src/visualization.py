@@ -22,7 +22,7 @@ def build_map_with_rasters(
     ndvi_opacity: float = 0.6,
     slope_opacity: float = 0.4,
     zoom_start: int = 15,
-    ndvi_threshold: float = 0.35,
+    ndvi_threshold: float = 0.20,
 ) -> folium.Map:
     # Expose threshold to colormap logic below
     ndvi_opacity_threshold = ndvi_threshold

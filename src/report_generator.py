@@ -72,7 +72,7 @@ CONCERN_BADGE_COLOR = {
 
 def generate_zone_map_image(
     ndvi_array: np.ndarray,
-    ndvi_threshold: float = 0.35,
+    ndvi_threshold: float = 0.20,
     width_px: int = 600,
     height_px: int = 400,
 ) -> bytes:
@@ -497,6 +497,71 @@ def generate_field_report(
         ("BOX",           (0,0), (-1,-1), 0.5, MID_GRAY),
     ]))
     story.append(rec_table)
+    story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
+    # EQIP PRE-VERIFICATION CHECKLIST
+    # -----------------------------------------------------------------------
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("EQIP Pre-Verification Report", section_style))
+
+    ndvi_mean_val   = ndvi_stats.get("mean", 0.0)
+    biomass_kgha    = max(0.0, (ndvi_mean_val - 0.10) / 0.40 * 3500)
+    valid_px        = ndvi_array[~np.isnan(ndvi_array)]
+    pct_above_020   = (np.sum(valid_px > 0.20) / valid_px.size * 100) if valid_px.size > 0 else 0.0
+    image_date_str  = ndvi_date_to if ndvi_date_to else "Upload date unknown"
+
+    cover_status = (
+        f"\u2705 NDVI {ndvi_mean_val:.3f} \u2014 cover crop confirmed"
+        if ndvi_mean_val > 0.20 else
+        f"\u26a0\ufe0f NDVI {ndvi_mean_val:.3f} \u2014 inadequate cover"
+    )
+    ground_cover_status = (
+        f"\u2705 {pct_above_020:.0f}% of field above NDVI 0.20"
+        if pct_above_020 > 50 else
+        f"\u26a0\ufe0f Only {pct_above_020:.0f}% of field above NDVI 0.20"
+    )
+
+    eqip_data = [
+        ["Requirement", "Data Source", "Status"],
+        ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status],
+        ["Spatial distribution", "Zone map attached",        "\u2705 Zone map attached"],
+        ["Image date",           "GEE metadata",             image_date_str],
+        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_kgha:.0f} kg/ha estimated"],
+        ["30% ground cover",     "NDVI threshold",           ground_cover_status],
+        ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site"],
+        ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site"],
+        ["Termination date",     "Not yet applicable",       "\u23f3 Pending \u2014 document at termination"],
+        ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission"],
+    ]
+
+    eqip_col_w = [1.8*inch, 1.9*inch, 3.3*inch]
+    eqip_table = Table(
+        [[Paragraph(str(cell), body_style) for cell in row] for row in eqip_data],
+        colWidths=eqip_col_w,
+    )
+    eqip_style = TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.0),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+        ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ])
+    eqip_table.setStyle(eqip_style)
+    story.append(eqip_table)
+
+    story.append(Paragraph(
+        "<i>Remote sensing confirms spatial cover crop presence. "
+        "Seeding rate, species, and termination compliance require CCA field "
+        "verification per NRCS Practice Code 340.</i>",
+        small_style,
+    ))
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------

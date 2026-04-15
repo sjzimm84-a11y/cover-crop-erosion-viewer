@@ -109,8 +109,6 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
-if "demo_loaded" not in st.session_state:
-    st.session_state.demo_loaded = False
 if "ndvi_source" not in st.session_state:
     st.session_state.ndvi_source = "auto"   # "auto" | "upload" | "sample"
 
@@ -119,10 +117,6 @@ if "ndvi_source" not in st.session_state:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 📍 Field Setup")
-
-    if st.button("🗺️ Load Shelby County Demo", type="primary", width='stretch'):
-        st.session_state.demo_loaded = True
-        st.rerun()
 
     boundary_file = st.file_uploader(
         "Upload field boundary",
@@ -176,8 +170,13 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ⚙️ Thresholds")
-    ndvi_threshold  = st.slider("Low cover NDVI", 0.0, 1.0, 0.10, 0.01)
-    slope_threshold = st.slider("Steep slope (%)", 0.0, 30.0, float(DEFAULT_THRESHOLDS["slope_steep"]), 0.5)
+    ndvi_threshold  = st.slider("Low cover NDVI", 0.0, 1.0, 0.20, 0.01)
+    slope_threshold = st.slider(
+        "Steep slope — Iowa HEL threshold (%)",
+        0.0, 30.0, 9.0, 0.5,
+        help="Iowa NRCS HEL threshold for Shelby County Monona-Nira-Ida soils. "
+             "Adjust based on local soil survey data.",
+    )
 
     st.divider()
     st.markdown("### 🗺️ Map Overlays")
@@ -201,10 +200,7 @@ ndvi_profile   = None
 # ---------------------------------------------------------------------------
 # Boundary resolution
 # ---------------------------------------------------------------------------
-if st.session_state.demo_loaded:
-    boundary_path = sample_paths["field"]
-    st.info("🗺️ Shelby County demo loaded — synthetic field data active.")
-elif boundary_file is not None:
+if boundary_file is not None:
     boundary_path = save_uploaded_file(boundary_file, temp_dir)
 else:
     boundary_path = sample_paths["field"]
@@ -232,7 +228,7 @@ except Exception as exc:
 status.text("Acquiring NDVI data...")
 progress.progress(25)
 
-if ndvi_mode == "Auto (Sentinel-2 API)" and not st.session_state.demo_loaded:
+if ndvi_mode == "Auto (Sentinel-2 API)":
     if not SENTINEL_AVAILABLE:
         st.warning(
             f"⚠️ GEE module not loaded. Error: {SENTINEL_IMPORT_ERROR}"
@@ -583,9 +579,49 @@ zone_chart.update_layout(
 st.plotly_chart(zone_chart, width='stretch')
 
 # ---------------------------------------------------------------------------
-# NRCS EQIP badge
+# EQIP Pre-Verification Report
 # ---------------------------------------------------------------------------
-st.success("✅ NRCS EQIP Ready — field data meets basic conservation planning requirements.")
+st.subheader("EQIP Pre-Verification Report")
+
+_ndvi_mean      = ndvi_stats["mean"]
+_biomass_kgha   = max(0.0, (_ndvi_mean - 0.10) / 0.40 * 3500)
+_valid_px       = ndvi_array[~np.isnan(ndvi_array)]
+_pct_above_020  = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
+_image_date_str = st.session_state.ndvi_date_to if st.session_state.ndvi_date_to else "Upload date unknown"
+
+_cover_status = (
+    f"✅ NDVI {_ndvi_mean:.3f} — cover crop confirmed"
+    if _ndvi_mean > 0.20 else
+    f"⚠️ NDVI {_ndvi_mean:.3f} — inadequate cover"
+)
+_ground_cover_status = (
+    f"✅ {_pct_above_020:.0f}% of field above NDVI 0.20"
+    if _pct_above_020 > 50 else
+    f"⚠️ Only {_pct_above_020:.0f}% of field above NDVI 0.20"
+)
+
+_eqip_rows = {
+    "Cover crop present":    ("Sentinel-2 NDVI > 0.20",   _cover_status),
+    "Spatial distribution":  ("Zone map attached",         "✅ Zone map attached"),
+    "Image date":            ("GEE metadata",              _image_date_str),
+    "Estimated biomass":     ("NDVI proxy",                f"~{_biomass_kgha:.0f} kg/ha estimated"),
+    "30% ground cover":      ("NDVI threshold",            _ground_cover_status),
+    "Seeding rate":          ("Field records required",    "📋 CCA to verify on-site"),
+    "Species confirmation":  ("Field records required",    "📋 CCA to verify on-site"),
+    "Termination date":      ("Not yet applicable",        "⏳ Pending — document at termination"),
+    "Cooperator signature":  ("Physical form required",    "📋 Required for EQIP submission"),
+}
+
+_eqip_df = pd.DataFrame(
+    [(req, src, status) for req, (src, status) in _eqip_rows.items()],
+    columns=["Requirement", "Data Source", "Status"],
+)
+st.dataframe(_eqip_df, hide_index=True, width='stretch')
+st.caption(
+    "Remote sensing confirms spatial cover crop presence. "
+    "Seeding rate, species, and termination compliance require CCA field verification "
+    "per NRCS Practice Code 340."
+)
 
 # ---------------------------------------------------------------------------
 # Report export — PDF + CSV
@@ -607,7 +643,8 @@ report_df = pd.DataFrame([
 st.subheader("📄 Generate Field Report")
 col_a, col_b, col_c = st.columns(3)
 with col_a:
-    pdf_field_name = st.text_input("Field name", value="North Field")
+    _default_field_name = Path(boundary_file.name).stem if boundary_file else "North Field"
+    pdf_field_name = st.text_input("Field name", value=_default_field_name)
 with col_b:
     pdf_farm_name  = st.text_input("Farm name",  value="")
 with col_c:

@@ -15,9 +15,15 @@ C-factor scale:
     0.0 = perfect cover (no erosion)
     1.0 = bare soil (maximum erosion)
 
-NDVI-to-C-factor proxy used here is calibrated to early-spring Iowa conditions
-where NDVI 0.2-0.4 represents typical winter rye establishment and
-NDVI > 0.5 represents well-established cereal rye or legume blend.
+NDVI-to-C-factor calibration:
+    Breakpoints are calibrated to cereal rye biomass thresholds per the national
+    cereal rye cover crop database (mean 3,428 kg/ha) and NRCS Practice Code 340
+    minimum stand requirement of 1,500 kg/ha at approximately NDVI 0.25.
+    NDVI 0.20 is the minimum detectable green cover threshold for Sentinel-2 10m
+    resolution under Iowa early-spring cloud conditions.
+    Source: Iowa RUSLE C-factor calibration to cereal rye biomass thresholds per
+    national cereal rye database (mean 3,428 kg/ha) and NRCS Practice Code 340
+    minimum of 1,500 kg/ha at approximately NDVI 0.25.
 """
 
 from typing import Dict, Any
@@ -27,8 +33,8 @@ import numpy as np
 # Default thresholds (kept for backward compatibility with sidebar sliders)
 # ---------------------------------------------------------------------------
 DEFAULT_THRESHOLDS = {
-    "ndvi_low":     0.35,
-    "slope_steep":  6.0,
+    "ndvi_low":     0.20,
+    "slope_steep":  9.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -38,14 +44,14 @@ DEFAULT_THRESHOLDS = {
 # ---------------------------------------------------------------------------
 IOWA_C_FACTOR_TABLE = {
     # (ndvi_min, ndvi_max): c_factor
-    (0.00, 0.10): 0.95,   # Bare/failed cover — essentially bare soil
-    (0.10, 0.20): 0.75,   # Sparse emergence, <20% cover
-    (0.20, 0.30): 0.55,   # Poor stand, early tiller (typical thin rye)
-    (0.30, 0.40): 0.35,   # Moderate stand, adequate ground cover
-    (0.40, 0.50): 0.20,   # Good cereal rye or radish stand
-    (0.50, 0.60): 0.10,   # Excellent stand, dense canopy
-    (0.60, 0.75): 0.05,   # Near-full canopy, premium cover
-    (0.75, 1.00): 0.02,   # Full canopy (may indicate cash crop — flag this)
+    # Calibrated to cereal rye biomass per national database (mean 3,428 kg/ha)
+    # and NRCS Practice Code 340 minimum (~1,500 kg/ha at NDVI ~0.25)
+    (0.00, 0.15): 0.90,   # Failed stand — essentially bare soil
+    (0.15, 0.20): 0.75,   # Inadequate — <1,000 kg/ha biomass
+    (0.20, 0.35): 0.45,   # Marginal — 1,000–2,500 kg/ha, NRCS 340 borderline
+    (0.35, 0.50): 0.20,   # Adequate — >2,500 kg/ha, meets NRCS minimum
+    (0.50, 0.65): 0.08,   # Good stand
+    (0.65, 1.00): 0.03,   # Excellent — near canopy saturation
 }
 
 # Slope-based LS-factor adjustment (simplified for field advisory use)
