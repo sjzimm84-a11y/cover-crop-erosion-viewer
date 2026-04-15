@@ -219,6 +219,7 @@ def generate_field_report(
     # Dates
     ndvi_date_from: Optional[str] = None,
     ndvi_date_to: Optional[str] = None,
+    ndvi_scene_date: Optional[str] = None,
     report_date: Optional[str] = None,
     dem_source: str = "Iowa 3m WCS",
     # CCA info
@@ -510,7 +511,7 @@ def generate_field_report(
     biomass_kgha    = max(0.0, (ndvi_mean_val - 0.10) / 0.40 * 3500)
     valid_px        = ndvi_array[~np.isnan(ndvi_array)]
     pct_above_020   = (np.sum(valid_px > 0.20) / valid_px.size * 100) if valid_px.size > 0 else 0.0
-    image_date_str  = ndvi_date_to if ndvi_date_to else "Upload date unknown"
+    image_date_str  = ndvi_scene_date if ndvi_scene_date else (ndvi_date_to if ndvi_date_to else "Upload date unknown")
 
     cover_status = (
         f"\u2705 NDVI {ndvi_mean_val:.3f} \u2014 cover crop confirmed"

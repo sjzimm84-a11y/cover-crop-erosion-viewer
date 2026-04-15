@@ -587,7 +587,16 @@ _ndvi_mean      = ndvi_stats["mean"]
 _biomass_kgha   = max(0.0, (_ndvi_mean - 0.10) / 0.40 * 3500)
 _valid_px       = ndvi_array[~np.isnan(ndvi_array)]
 _pct_above_020  = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
-_image_date_str = st.session_state.ndvi_date_to if st.session_state.ndvi_date_to else "Upload date unknown"
+_s_latest   = st.session_state.ndvi_scene_latest
+_s_earliest = st.session_state.ndvi_scene_earliest
+_s_count    = st.session_state.ndvi_scene_count
+if _s_latest:
+    if _s_count and _s_count > 1 and _s_earliest and _s_earliest != _s_latest:
+        _image_date_str = f"{_s_count} scenes: {_s_earliest} – {_s_latest}"
+    else:
+        _image_date_str = _s_latest
+else:
+    _image_date_str = "Upload date unknown"
 
 _cover_status = (
     f"✅ NDVI {_ndvi_mean:.3f} — cover crop confirmed"
@@ -670,6 +679,7 @@ with col_dl1:
                     slope_threshold=slope_threshold,
                     ndvi_date_from=st.session_state.ndvi_date_from,
                     ndvi_date_to=st.session_state.ndvi_date_to,
+                    ndvi_scene_date=_image_date_str,
                     dem_source=st.session_state.get("dem_source_label", "Iowa 3m WCS"),
                 )
                 st.download_button(
