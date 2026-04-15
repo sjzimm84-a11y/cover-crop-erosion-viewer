@@ -14,3 +14,4 @@ requests>=2.31
 streamlit-folium>=0.18
 earthengine-api>=0.1.384
 google-auth>=2.28
+reportlab>=4.0
