@@ -250,12 +250,14 @@ if ndvi_mode == "Auto (Sentinel-2 API)":
                 date_to   = _dt.now()
                 date_from = date_to - _td(days=days_back)
 
-            ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg, scene_meta = fetch_ndvi_streamlit(
+            ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg, scene_meta, ndvi_warning = fetch_ndvi_streamlit(
                 boundary_gdf=field_boundary,
                 date_from=date_from,
                 date_to=date_to,
             )
             st.success(ndvi_msg)
+            if ndvi_warning:
+                st.warning(ndvi_warning)
 
             # Store actual scene acquisition dates (not just the query window)
             latest_scene  = scene_meta.get("latest_date")

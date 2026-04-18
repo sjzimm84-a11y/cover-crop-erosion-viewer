@@ -258,10 +258,10 @@ def fetch_ndvi_streamlit(
     boundary_gdf: gpd.GeoDataFrame,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
-) -> Tuple[np.ndarray, Any, Dict[str, Any], str, Dict[str, Any]]:
+) -> Tuple[np.ndarray, Any, Dict[str, Any], str, Dict[str, Any], Optional[str]]:
     """
     GEE NDVI fetch for Streamlit. Initializes auth from secrets.
-    Returns (array, transform, profile, status_message, scene_meta).
+    Returns (array, transform, profile, status_message, scene_meta, warning_message|None).
     scene_meta keys: count, earliest_date (datetime|None), latest_date (datetime|None)
     """
     init_gee_from_streamlit_secrets()
@@ -272,29 +272,30 @@ def fetch_ndvi_streamlit(
         date_to=date_to,
     )
 
-    valid     = ndvi[~np.isnan(ndvi)]
+    valid     = ndvi[(ndvi > 0.05) & ~np.isnan(ndvi)]
     valid_pct = valid.size / ndvi.size * 100 if ndvi.size > 0 else 0
+    mean_ndvi = float(np.nanmean(ndvi))
 
-    # Build a human-readable scene date string
-    count = scene_meta.get("count", 0)
-    latest  = scene_meta.get("latest_date")
+    count    = scene_meta.get("count", 0)
+    latest   = scene_meta.get("latest_date")
     earliest = scene_meta.get("earliest_date")
-    if latest and earliest and earliest.date() != latest.date():
-        scene_str = (
-            f"{count} scenes · "
-            f"{earliest.strftime('%b %d')}–{latest.strftime('%b %d, %Y')}"
-        )
-    elif latest:
-        scene_str = f"1 scene · {latest.strftime('%b %d, %Y')}"
-    else:
-        d_from = date_from.strftime("%b %d") if date_from else "Jan 1"
-        d_to   = date_to.strftime("%b %d, %Y") if date_to else "Today"
-        scene_str = f"{d_from} – {d_to}"
+
+    d_from = earliest.strftime("%b %d") if earliest else (date_from.strftime("%b %d") if date_from else "Jan 1")
+    d_to   = latest.strftime("%b %d, %Y") if latest else (date_to.strftime("%b %d, %Y") if date_to else "Today")
 
     message = (
         f"✅ Sentinel-2 NDVI via Google Earth Engine | "
-        f"{scene_str} | "
-        f"{valid_pct:.0f}% valid pixels | "
-        f"Mean NDVI: {float(np.nanmean(ndvi)):.3f}"
+        f"{count} scene(s) · {d_from} – {d_to} | "
+        f"{valid_pct:.0f}% valid pixels (NDVI > 0.05) | "
+        f"Mean NDVI: {mean_ndvi:.3f}"
     )
-    return ndvi, transform, profile, message, scene_meta
+
+    warning = None
+    if count == 1 or valid_pct < 30:
+        warning = (
+            f"⚠️ Low scene count or high cloud shadow contamination detected. "
+            f"Mean NDVI {mean_ndvi:.3f} may not reflect actual cover crop conditions. "
+            f"Widen date range to capture more scenes."
+        )
+
+    return ndvi, transform, profile, message, scene_meta, warning
