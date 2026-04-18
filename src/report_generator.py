@@ -221,10 +221,15 @@ def generate_field_report(
     ndvi_date_to: Optional[str] = None,
     ndvi_scene_date: Optional[str] = None,
     report_date: Optional[str] = None,
-    dem_source: str = "Iowa 3m WCS",
+    dem_source: str = "Iowa 3-meter Digital Elevation Model (Iowa DNR)",
     # CCA info
     cca_name: str = "Stephen Zimmerman, CCA MS",
     cca_contact: str = "Ankeny, IA | Ag Research Scientist",
+    # Optional field detail
+    termination_date: Optional[str] = None,
+    previous_crop: Optional[str] = None,
+    soil_series: Optional[str] = None,
+    soil_k_factor: Optional[str] = None,
 ) -> bytes:
     """
     Generate single-page PDF field summary report.
@@ -314,20 +319,36 @@ def generate_field_report(
     elif ndvi_date_to:
         ndvi_date_str = f"NDVI collected: {ndvi_date_to}"
 
-    field_data = [[
-        Paragraph(f"<b>Field:</b> {field_name}", body_style),
-        Paragraph(f"<b>Farm:</b> {farm_name}", body_style),
-        Paragraph(f"<b>County:</b> {county}", body_style),
-        Paragraph(f"<b>Report Date:</b> {report_date}", body_style),
-    ]]
+    _soil_display = "Not available"
+    if soil_series and soil_series not in ("Not available", "Unknown"):
+        _soil_display = (
+            f"{soil_series} — K-factor: {soil_k_factor}"
+            if soil_k_factor and soil_k_factor != "N/A"
+            else soil_series
+        )
+
+    field_data = [
+        [
+            Paragraph(f"<b>Field:</b> {field_name}", body_style),
+            Paragraph(f"<b>Farm:</b> {farm_name}", body_style),
+            Paragraph(f"<b>County:</b> {county}", body_style),
+            Paragraph(f"<b>Report Date:</b> {report_date}", body_style),
+        ],
+        [
+            Paragraph(f"<b>Previous crop:</b> {previous_crop or 'Not recorded'}", body_style),
+            Paragraph(f"<b>Termination date:</b> {termination_date or '⏳ Pending — document at termination'}", body_style),
+            Paragraph(f"<b>Dominant soil series:</b> {_soil_display}", body_style),
+            Paragraph(f"<b>Data source:</b> USDA Web Soil Survey", body_style),
+        ],
+    ]
     field_table = Table(field_data, colWidths=[1.75*inch]*4)
     field_table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), LIGHT_GRAY),
-        ("ROWBACKGROUNDS", (0,0), (-1,-1), [LIGHT_GRAY]),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
-        ("TOPPADDING", (0,0), (-1,-1), 5),
-        ("LEFTPADDING", (0,0), (-1,-1), 6),
-        ("BOX", (0,0), (-1,-1), 0.5, MID_GRAY),
+        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("BOX",           (0, 0), (-1, -1), 0.5, MID_GRAY),
+        ("LINEBELOW",     (0, 0), (-1, 0),  0.3, MID_GRAY),
     ]))
     story.append(field_table)
 
@@ -470,6 +491,29 @@ def generate_field_report(
         ("VALIGN", (0,0), (-1,-1), "TOP"),
     ]))
     story.append(combined)
+    story.append(Spacer(1, 6))
+
+    # Image date disclaimer (amber info box)
+    _img_date_label = ndvi_date_to or ndvi_scene_date or "unknown"
+    disclaimer_text = (
+        f"NDVI imagery dated {_img_date_label}. Field conditions may have changed since "
+        f"image capture. This report documents satellite-observed conditions only."
+    )
+    disclaimer_style = ParagraphStyle(
+        "Disclaimer", parent=body_style,
+        fontSize=8, textColor=colors.HexColor("#92400e"),
+    )
+    disc_data = [[Paragraph(disclaimer_text, disclaimer_style)]]
+    disc_table = Table(disc_data, colWidths=[7*inch])
+    disc_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#fef3c7")),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("BOX",           (0, 0), (-1, -1), 0.5, colors.HexColor("#f59e0b")),
+    ]))
+    story.append(disc_table)
     story.append(Spacer(1, 8))
 
     # -----------------------------------------------------------------------
@@ -505,13 +549,16 @@ def generate_field_report(
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
                             color=MID_GRAY, spaceAfter=4))
-    story.append(Paragraph("EQIP Pre-Verification Report", section_style))
+    story.append(Paragraph("Cover Crop Stand Assessment — Satellite Documentation", section_style))
 
-    ndvi_mean_val   = ndvi_stats.get("mean", 0.0)
-    biomass_kgha    = max(0.0, (ndvi_mean_val - 0.10) / 0.40 * 3500)
-    valid_px        = ndvi_array[~np.isnan(ndvi_array)]
-    pct_above_020   = (np.sum(valid_px > 0.20) / valid_px.size * 100) if valid_px.size > 0 else 0.0
-    image_date_str  = ndvi_scene_date if ndvi_scene_date else (ndvi_date_to if ndvi_date_to else "Upload date unknown")
+    ndvi_mean_val  = ndvi_stats.get("mean", 0.0)
+    biomass_kgha   = max(0.0, (ndvi_mean_val - 0.10) / 0.40 * 3500)
+    biomass_lbac   = biomass_kgha * 0.891
+    biomass_low    = max(0, round(biomass_lbac * 0.6 / 50) * 50)
+    biomass_high   = round(biomass_lbac * 1.4 / 50) * 50
+    valid_px       = ndvi_array[~np.isnan(ndvi_array)]
+    pct_above_020  = (np.sum(valid_px > 0.20) / valid_px.size * 100) if valid_px.size > 0 else 0.0
+    image_date_str = ndvi_scene_date if ndvi_scene_date else (ndvi_date_to if ndvi_date_to else "Upload date unknown")
 
     cover_status = (
         f"\u2705 NDVI {ndvi_mean_val:.3f} \u2014 cover crop confirmed"
@@ -519,21 +566,22 @@ def generate_field_report(
         f"\u26a0\ufe0f NDVI {ndvi_mean_val:.3f} \u2014 inadequate cover"
     )
     ground_cover_status = (
-        f"\u2705 {pct_above_020:.0f}% of field above NDVI 0.20"
+        "\u2705 Estimated adequate cover zones based on NDVI threshold \u2014 field verification recommended"
         if pct_above_020 > 50 else
-        f"\u26a0\ufe0f Only {pct_above_020:.0f}% of field above NDVI 0.20"
+        "\u26a0\ufe0f Estimated adequate cover zones below 50% of field \u2014 field verification recommended"
     )
+    _term_status = termination_date if termination_date else "\u23f3 Pending \u2014 document at termination"
 
     eqip_data = [
         ["Requirement", "Data Source", "Status"],
         ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status],
-        ["Spatial distribution", "Zone map attached",        "\u2705 Zone map attached"],
+        ["Field boundary",       "Operator provided",        "Verify against FSA CLU records"],
         ["Image date",           "GEE metadata",             image_date_str],
-        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_kgha:.0f} kg/ha estimated"],
+        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_low}\u2013{biomass_high} lb/acre (\u00b140% NDVI proxy)"],
         ["30% ground cover",     "NDVI threshold",           ground_cover_status],
         ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site"],
         ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site"],
-        ["Termination date",     "Not yet applicable",       "\u23f3 Pending \u2014 document at termination"],
+        ["Termination date",     "Field records required",   _term_status],
         ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission"],
     ]
 
@@ -566,6 +614,51 @@ def generate_field_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
+    # CCA FIELD VERIFICATION NOTES
+    # -----------------------------------------------------------------------
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("CCA Field Verification Notes", section_style))
+
+    notes_style = ParagraphStyle(
+        "NotesLine", parent=body_style,
+        fontSize=8, leading=18, textColor=colors.HexColor("#57606a"),
+    )
+    rule_line = "_" * 110
+    notes_content = [
+        Paragraph(rule_line, notes_style),
+        Paragraph(rule_line, notes_style),
+        Paragraph(rule_line, notes_style),
+        Paragraph(rule_line, notes_style),
+        Spacer(1, 6),
+        Paragraph(
+            "[ ] I have reviewed this satellite assessment and confirm it accurately "
+            "represents field conditions to the best of my knowledge.",
+            body_style,
+        ),
+        Spacer(1, 8),
+        Paragraph(
+            f"CCA Signature: ___________________________  Initials: _______  Date: _______________",
+            body_style,
+        ),
+        Spacer(1, 4),
+        Paragraph(f"Printed Name: {cca_name}", body_style),
+    ]
+    notes_data = [[content] for content in notes_content]
+    notes_block = Table([[col] for col in notes_content], colWidths=[7*inch])
+    notes_block.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("BOX",           (0, 0), (-1, -1), 0.5, MID_GRAY),
+    ]))
+    story.append(notes_block)
+    story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
     # FOOTER
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
@@ -577,7 +670,7 @@ def generate_field_report(
         "C-Factor methodology: Iowa RUSLE lookup table — "
         "Laflen & Roose (1998), ISU Extension PM-1209. "
         "This report is advisory only and does not constitute an official NRCS determination.",
-        f"Generated by Cover Crop Erosion Viewer | {cca_name} | {report_date}",
+        f"Generated by Cover Crop Erosion Viewer — Cover Crop Stand Assessment | {cca_name} | {report_date}",
     ]
     for line in footer_lines:
         story.append(Paragraph(line, small_style))

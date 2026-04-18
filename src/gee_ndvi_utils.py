@@ -111,6 +111,21 @@ def _add_ndvi(image: "ee.Image") -> "ee.Image":
     return image.addBands(ndvi)
 
 
+def _field_cloud_fraction(image: "ee.Image", aoi: "ee.Geometry") -> "ee.Image":
+    """Tag each image with the fraction of cloud/shadow pixels within the field AOI."""
+    scl = image.select("SCL")
+    cloud_shadow_mask = (
+        scl.eq(3).Or(scl.eq(8)).Or(scl.eq(9)).Or(scl.eq(10)).Or(scl.eq(11))
+    )
+    cloud_fraction = cloud_shadow_mask.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=aoi,
+        scale=20,
+        maxPixels=1e6,
+    ).get("SCL")
+    return image.set("field_cloud_fraction", cloud_fraction)
+
+
 def _get_collection(
     aoi: "ee.Geometry",
     date_from: datetime,
@@ -185,6 +200,31 @@ def fetch_ndvi_for_field(
             f"and {date_to.strftime('%Y-%m-%d')}. "
             f"Try a wider date range."
         )
+
+    # Field-level SCL cloud/shadow filter — more accurate than scene-level for small Iowa fields
+    # Re-select all bands before SCL tagging, then restore NDVI-only after filtering
+    collection_with_scl = (
+        ee.ImageCollection(S2_COLLECTION)
+        .filterBounds(aoi)
+        .filterDate(date_from.strftime("%Y-%m-%d"), date_to.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct))
+    )
+    collection_with_scl = (
+        collection_with_scl
+        .map(lambda img: _field_cloud_fraction(img, aoi))
+        .filter(ee.Filter.lt("field_cloud_fraction", 0.30))
+        .map(_add_ndvi)
+        .select("NDVI")
+    )
+    field_count = collection_with_scl.size().getInfo()
+    if field_count == 0:
+        raise RuntimeError(
+            "No scenes passed field-level cloud filter for this date range. "
+            "Iowa cloud cover is blocking all scenes. "
+            "Widen date range to capture more scenes."
+        )
+    collection = collection_with_scl
+    count = field_count
 
     # Extract actual scene acquisition dates from the collection
     scene_meta: Dict[str, Any] = {"count": count, "earliest_date": None, "latest_date": None}
@@ -276,26 +316,23 @@ def fetch_ndvi_streamlit(
     valid_pct = valid.size / ndvi.size * 100 if ndvi.size > 0 else 0
     mean_ndvi = float(np.nanmean(ndvi))
 
-    count    = scene_meta.get("count", 0)
-    latest   = scene_meta.get("latest_date")
-    earliest = scene_meta.get("earliest_date")
-
-    d_from = earliest.strftime("%b %d") if earliest else (date_from.strftime("%b %d") if date_from else "Jan 1")
-    d_to   = latest.strftime("%b %d, %Y") if latest else (date_to.strftime("%b %d, %Y") if date_to else "Today")
+    scene_count = scene_meta.get("count", 0)
+    d_from = date_from.strftime("%b %d, %Y") if date_from else "Jan 1"
+    d_to   = date_to.strftime("%b %d, %Y")   if date_to   else "Today"
 
     message = (
         f"✅ Sentinel-2 NDVI via Google Earth Engine | "
-        f"{count} scene(s) · {d_from} – {d_to} | "
+        f"{scene_count} scene(s) · {d_from} – {d_to} | "
         f"{valid_pct:.0f}% valid pixels (NDVI > 0.05) | "
         f"Mean NDVI: {mean_ndvi:.3f}"
     )
 
     warning = None
-    if count == 1 or valid_pct < 30:
+    if scene_count == 1:
         warning = (
-            f"⚠️ Low scene count or high cloud shadow contamination detected. "
-            f"Mean NDVI {mean_ndvi:.3f} may not reflect actual cover crop conditions. "
-            f"Widen date range to capture more scenes."
+            "⚠️ Single scene only — cloud contamination risk is elevated. "
+            "Widen date range for a more reliable composite before using for "
+            "EQIP documentation."
         )
 
     return ndvi, transform, profile, message, scene_meta, warning

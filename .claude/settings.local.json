@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile src/gee_ndvi_utils.py)",
+      "Bash(python -m py_compile src/wss_utils.py)",
+      "Bash(python -m py_compile src/scoring.py)",
+      "Bash(python -m py_compile app.py)",
+      "Bash(python -m py_compile src/report_generator.py)"
+    ]
+  }
+}

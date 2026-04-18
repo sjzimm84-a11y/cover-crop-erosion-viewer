@@ -25,7 +25,6 @@ from src.scoring import (
     DEFAULT_THRESHOLDS,
     score_erosion_concern,
     pixel_level_concern,
-    SPECIES_C_TARGETS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report
@@ -347,8 +346,8 @@ try:
         sample_dem_path=sample_paths["dem"],
     )
     if dem_source == "Iowa 3m WCS (auto)":
-        st.success(f"🛰️ DEM auto-fetched from Iowa 3m WCS")
-        st.session_state.dem_source_label = dem_source
+        st.success(f"🛰️ DEM auto-fetched from Iowa 3-meter Digital Elevation Model (Iowa DNR)")
+        st.session_state.dem_source_label = "Iowa 3-meter Digital Elevation Model (Iowa DNR)"
     else:
         st.info(f"📁 DEM source: {dem_source}")
 except Exception as exc:
@@ -416,6 +415,18 @@ if ndvi_array.shape != slope_percent.shape:
     slope_percent = slope_resampled
 
 # ---------------------------------------------------------------------------
+# WSS dominant soil series lookup (Change 2)
+# ---------------------------------------------------------------------------
+try:
+    from src.wss_utils import get_dominant_soil_series
+    soil_info = get_dominant_soil_series(field_boundary)
+    st.session_state.soil_series   = soil_info.get("series_name", "Not available")
+    st.session_state.soil_k_factor = soil_info.get("k_factor", None)
+except Exception:
+    st.session_state.soil_series   = "Not available"
+    st.session_state.soil_k_factor = None
+
+# ---------------------------------------------------------------------------
 # Map
 # ---------------------------------------------------------------------------
 status.text("Building map...")
@@ -437,6 +448,10 @@ if "ndvi_scene_count" not in st.session_state:
     st.session_state.ndvi_scene_count = None
 if "dem_source_label" not in st.session_state:
     st.session_state.dem_source_label = "Sample DEM"
+if "soil_series" not in st.session_state:
+    st.session_state.soil_series = "Not available"
+if "soil_k_factor" not in st.session_state:
+    st.session_state.soil_k_factor = None
 
 
 folium_map = build_map_with_rasters(
@@ -520,15 +535,22 @@ st.info(f"{icon} **NRCS Advisory:** {risk_result['recommendation']}")
 # Metrics row
 # ---------------------------------------------------------------------------
 st.subheader("📊 Field Summary")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+_soil_label = st.session_state.get("soil_series", "—") or "—"
+_soil_kf    = st.session_state.get("soil_k_factor")
+if _soil_kf:
+    _soil_label = f"{_soil_label} (K={_soil_kf})"
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 c1.metric("NDVI Mean",      f"{ndvi_stats['mean']:.3f}")
 c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
 c3.metric("NDVI Max",       f"{ndvi_stats['max']:.3f}")
-c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.2f}")
+c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.1f}%")
 c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
           help="RUSLE C-factor from Iowa lookup table. Lower = better cover.")
-c6.metric("RUSLE C×LS",     f"{risk_result['rusle_score']:.3f}",
-          help="Combined erosion index. >0.7 = Moderate, >1.5 = High.")
+c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
+          help="Unitless erosion risk index (C-factor × LS-factor). "
+               "Scale: <0.3 Minimal · 0.3-0.7 Moderate · 0.7-1.5 High · >1.5 Critical")
+c7.metric("Dominant Soil",  _soil_label,
+          help="Dominant soil series from USDA Web Soil Survey SSURGO")
 
 # NDVI freshness warning
 if ndvi_stats["mean"] > 0.75:
@@ -536,32 +558,6 @@ if ndvi_stats["mean"] > 0.75:
         "⚠️ High NDVI may indicate mature cash crops rather than cover crops. "
         "Verify image date — early spring pull recommended for accurate assessment."
     )
-
-# ---------------------------------------------------------------------------
-# C-factor species comparison chart
-# ---------------------------------------------------------------------------
-st.subheader("🌱 C-Factor vs Iowa Cover Crop Targets")
-species_df = pd.DataFrame([
-    {"Species": k, "C-Factor Target": v, "Type": "Target"}
-    for k, v in SPECIES_C_TARGETS.items()
-])
-species_df = pd.concat([
-    species_df,
-    pd.DataFrame([{"Species": "⬅ This Field", "C-Factor Target": risk_result["c_factor"], "Type": "Field"}])
-], ignore_index=True)
-
-fig_species = px.bar(
-    species_df, x="C-Factor Target", y="Species",
-    orientation="h",
-    color="Type",
-    color_discrete_map={"Target": "#1f6feb", "Field": "#f78166"},
-    title="Field C-Factor vs Iowa Species Benchmarks (lower = better cover)",
-)
-fig_species.update_layout(
-    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
-    font_color="#c9d1d9", showlegend=False,
-)
-st.plotly_chart(fig_species, width='stretch')
 
 # ---------------------------------------------------------------------------
 # Zone risk summary
@@ -572,7 +568,18 @@ zone_summary = zone_risk_summary(
     slope_threshold=slope_threshold,
 )
 st.subheader("📋 Zone Risk Summary")
-st.dataframe(zone_summary, width='stretch')
+zone_summary_display = zone_summary.copy()
+if "slope_mean" in zone_summary_display.columns:
+    zone_summary_display["slope_mean"] = zone_summary_display["slope_mean"].apply(
+        lambda x: f"{x:.1f}%"
+    )
+zone_summary_display = zone_summary_display.rename(columns={
+    "zone":       "Zone",
+    "percent":    "% of Field",
+    "ndvi_mean":  "NDVI Mean",
+    "slope_mean": "Slope Mean (3m DEM, UTM)",
+})
+st.dataframe(zone_summary_display, width='stretch')
 
 zone_chart = build_zone_risk_chart(zone_summary)
 zone_chart.update_layout(
@@ -581,14 +588,33 @@ zone_chart.update_layout(
 st.plotly_chart(zone_chart, width='stretch')
 
 # ---------------------------------------------------------------------------
-# EQIP Pre-Verification Report
+# Cover Crop Stand Assessment
 # ---------------------------------------------------------------------------
-st.subheader("EQIP Pre-Verification Report")
+st.subheader("📋 Cover Crop Stand Assessment — Satellite Documentation")
 
-_ndvi_mean      = ndvi_stats["mean"]
-_biomass_kgha   = max(0.0, (_ndvi_mean - 0.10) / 0.40 * 3500)
-_valid_px       = ndvi_array[~np.isnan(ndvi_array)]
-_pct_above_020  = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
+_ndvi_mean     = ndvi_stats["mean"]
+_biomass_kgha  = max(0.0, (_ndvi_mean - 0.10) / 0.40 * 3500)
+_biomass_lbac  = _biomass_kgha * 0.891
+_biomass_low   = max(0, round(_biomass_lbac * 0.6 / 50) * 50)
+_biomass_high  = round(_biomass_lbac * 1.4 / 50) * 50
+_valid_px      = ndvi_array[~np.isnan(ndvi_array)]
+_pct_above_020 = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
+_valid_pct     = (_valid_px.size / ndvi_array.size * 100) if ndvi_array.size > 0 else 0.0
+
+_valid_warning = None
+if _valid_pct < 50:
+    _valid_warning = (
+        f"⚠️ Only {_valid_pct:.0f}% of field pixels returned valid NDVI values. "
+        f"Results are unreliable — widen date range before using for documentation."
+    )
+elif _valid_pct < 75:
+    _valid_warning = (
+        f"⚠️ {_valid_pct:.0f}% valid pixels. Results may be affected by cloud cover. "
+        f"Consider widening date range."
+    )
+if _valid_warning:
+    st.warning(_valid_warning)
+
 _s_latest   = st.session_state.ndvi_scene_latest
 _s_earliest = st.session_state.ndvi_scene_earliest
 _s_count    = st.session_state.ndvi_scene_count
@@ -606,17 +632,18 @@ _cover_status = (
     f"⚠️ NDVI {_ndvi_mean:.3f} — inadequate cover"
 )
 _ground_cover_status = (
-    f"✅ {_pct_above_020:.0f}% of field above NDVI 0.20"
+    "✅ Estimated adequate cover zones based on NDVI threshold — field verification recommended"
     if _pct_above_020 > 50 else
-    f"⚠️ Only {_pct_above_020:.0f}% of field above NDVI 0.20"
+    "⚠️ Estimated adequate cover zones below 50% of field — field verification recommended"
 )
 
 _eqip_rows = {
     "Cover crop present":    ("Sentinel-2 NDVI > 0.20",   _cover_status),
-    "Spatial distribution":  ("Zone map attached",         "✅ Zone map attached"),
+    "Field boundary":        ("Operator provided",         "📋 Verify against FSA CLU records"),
     "Image date":            ("GEE metadata",              _image_date_str),
-    "Estimated biomass":     ("NDVI proxy",                f"~{_biomass_kgha:.0f} kg/ha estimated"),
+    "Estimated biomass":     ("NDVI proxy",                f"~{_biomass_low}–{_biomass_high} lb/acre (±40% NDVI proxy)"),
     "30% ground cover":      ("NDVI threshold",            _ground_cover_status),
+    "Valid pixels":          ("NDVI > 0.05 threshold",     f"{'✅' if _valid_pct >= 75 else '⚠️'} {_valid_pct:.0f}% valid pixels ({'reliable' if _valid_pct >= 75 else 'below 75% — verify date range'})"),
     "Seeding rate":          ("Field records required",    "📋 CCA to verify on-site"),
     "Species confirmation":  ("Field records required",    "📋 CCA to verify on-site"),
     "Termination date":      ("Not yet applicable",        "⏳ Pending — document at termination"),
@@ -661,6 +688,16 @@ with col_b:
 with col_c:
     pdf_county     = st.text_input("County",     value="Shelby County, IA")
 
+col_d, col_e, col_f = st.columns(3)
+with col_d:
+    pdf_termination_date = st.text_input(
+        "Termination date (optional)", value="", placeholder="e.g. May 10, 2026")
+with col_e:
+    pdf_cca_name = st.text_input("CCA name", value="Stephen Zimmerman, CCA MS")
+with col_f:
+    pdf_previous_crop = st.text_input(
+        "Previous crop (optional)", value="", placeholder="e.g. Corn, Soybeans")
+
 col_dl1, col_dl2 = st.columns(2)
 
 with col_dl1:
@@ -682,7 +719,12 @@ with col_dl1:
                     ndvi_date_from=st.session_state.ndvi_date_from,
                     ndvi_date_to=st.session_state.ndvi_date_to,
                     ndvi_scene_date=_image_date_str,
-                    dem_source=st.session_state.get("dem_source_label", "Iowa 3m WCS"),
+                    dem_source=st.session_state.get("dem_source_label", "Iowa 3-meter Digital Elevation Model (Iowa DNR)"),
+                    termination_date=pdf_termination_date or None,
+                    cca_name=pdf_cca_name or "Stephen Zimmerman, CCA MS",
+                    previous_crop=pdf_previous_crop or None,
+                    soil_series=st.session_state.get("soil_series"),
+                    soil_k_factor=st.session_state.get("soil_k_factor"),
                 )
                 st.download_button(
                     label="⬇️ Download PDF Report",
