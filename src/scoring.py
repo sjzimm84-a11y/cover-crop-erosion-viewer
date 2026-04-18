@@ -150,24 +150,25 @@ def score_erosion_concern(
 
     # Plain-English recommendations by concern level
     recommendations = {
-        "Low": (
-            "Cover crop establishment is adequate. Monitor for stand gaps. "
-            "No immediate EQIP action required."
-        ),
-        "Moderate": (
-            "Cover crop stand is marginal for slope conditions. "
-            "Consider overseeding thin areas before termination. "
-            "Document for NRCS EQIP payment verification."
+        "Critical": (
+            "Satellite imagery indicates low cover crop establishment "
+            "on high-risk slope units. Stand density appears below effective "
+            "erosion protection thresholds for this terrain based on NDVI analysis."
         ),
         "High": (
-            "High erosion risk detected. Low cover on moderate-steep slopes. "
-            "Recommend reseeding red zones with cereal rye at 60 lb/ac. "
-            "Flag field for NRCS site visit before spring termination."
+            "Cover crop establishment is marginal on identified slope areas. "
+            "Erosion protection is likely insufficient on steeper terrain units "
+            "based on NDVI analysis."
         ),
-        "Critical": (
-            "Critical erosion risk. Inadequate cover on steep slopes. "
-            "Immediate intervention recommended. Contact NRCS Shelby County office. "
-            "Consider emergency cover seeding or residue management."
+        "Moderate": (
+            "Cover crop stand is variable across slope positions based "
+            "on NDVI analysis. Erosion risk increases on steeper units during "
+            "spring rainfall events."
+        ),
+        "Low": (
+            "Cover crop establishment is adequate for current slope conditions. "
+            "Canopy development appears sufficient to reduce erosion risk based on "
+            "NDVI analysis."
         ),
     }
 

@@ -180,8 +180,8 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🗺️ Map Overlays")
-    ndvi_opacity  = st.slider("NDVI opacity",  0.0, 1.0, 0.6, 0.1)
-    slope_opacity = st.slider("Slope opacity", 0.0, 1.0, 0.4, 0.1)
+    ndvi_opacity  = st.slider("NDVI opacity",  0.0, 1.0, 0.8, 0.1)
+    slope_opacity = st.slider("Slope opacity", 0.0, 1.0, 0.1, 0.1)
 
 # ---------------------------------------------------------------------------
 # Temp dir and sample data
