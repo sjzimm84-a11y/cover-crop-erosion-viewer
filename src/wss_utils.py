@@ -31,7 +31,7 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     FROM mapunit mu
     INNER JOIN component c ON mu.mukey = c.mukey
     WHERE mu.mukey IN (
-        SELECT * FROM SDA_Get_Mukey_from_intersection(
+        SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(
             '{wkt_polygon}')
     )
     AND c.majcompflag = 'Yes'
