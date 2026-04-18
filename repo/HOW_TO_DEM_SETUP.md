@@ -1,4 +1,4 @@
-# How to Set Up DEM Data for Cover Crop Erosion Viewer
+# How to Set Up DEM Data for CoverMap
 
 ## Overview
 This guide covers two paths for DEM data:
@@ -165,5 +165,5 @@ Key requirements for NDVI upload:
 
 ---
 
-*Cover Crop Erosion Viewer — Stephen Zimmerman CCA MS — Ankeny IA*
+*CoverMap — Stephen Zimmerman CCA MS — Ankeny IA*
 *Last updated: April 2026*

@@ -1,4 +1,4 @@
-# Cover Crop Erosion Viewer
+# CoverMap
 
 A lightweight prototype for agricultural conservation teams to explore early-season cover crop concern using NDVI and terrain slope.
 

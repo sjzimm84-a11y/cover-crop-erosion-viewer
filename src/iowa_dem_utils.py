@@ -92,7 +92,7 @@ def fetch_iowa_dem(
             IOWA_DEM_URL,
             params=params,
             timeout=timeout,
-            headers={"User-Agent": "CoverCropErosionViewer/1.0"},
+            headers={"User-Agent": "CoverMap/1.0"},
         )
     except requests.exceptions.Timeout:
         raise RuntimeError(

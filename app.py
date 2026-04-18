@@ -43,10 +43,10 @@ try:
 except Exception as _sentinel_exc:
     SENTINEL_IMPORT_ERROR = str(_sentinel_exc)
 
-APP_TITLE       = "Cover Crop Erosion Viewer"
+APP_TITLE       = "CoverMap"
 APP_DESCRIPTION = (
-    "Field-level erosion risk using Sentinel-2 NDVI and terrain slope. "
-    "NRCS EQIP ready · Iowa RUSLE C-factor scoring · Automated satellite pull."
+    "Field-scale cover crop stand assessment using Sentinel-2 NDVI and terrain slope. "
+    "Iowa RUSLE C-factor scoring · Automated satellite pull · CCA-ready documentation."
 )
 
 # ---------------------------------------------------------------------------
@@ -729,7 +729,7 @@ with col_dl1:
                 st.download_button(
                     label="⬇️ Download PDF Report",
                     data=pdf_bytes,
-                    file_name=f"erosion_report_{(pdf_field_name or 'field').replace(' ','_')}.pdf",
+                    file_name=f"covermap_report_{(pdf_field_name or 'field').replace(' ','_')}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                 )
@@ -748,6 +748,6 @@ with col_dl2:
 
 st.divider()
 st.caption(
-    "Cover Crop Erosion Viewer · Stephen Zimmerman CCA MS · Ankeny IA · "
-    "Sentinel-2 L2A via Copernicus Data Space · Iowa RUSLE C-factor calibration"
+    "CoverMap · Stephen Zimmerman CCA MS · Ankeny IA · "
+    "Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration"
 )
