@@ -82,6 +82,21 @@ CONCERN_THRESHOLDS = {
     "Critical": float("inf"),
 }
 
+# ---------------------------------------------------------------------------
+# Residue adjustment multipliers — applied to NDVI-derived C-factor
+# to account for crop residue protection not captured by satellite imagery.
+# Source: ISU Extension PM-1901, NRCS RUSLE2 Iowa State File guidance
+# ---------------------------------------------------------------------------
+RESIDUE_ADJUSTMENTS = {
+    "No-till corn (high residue ~80% cover)":         0.30,
+    "No-till soybeans (moderate residue — fragile)":  0.55,
+    "Tillage — > 30% residue (conservation tillage)": 0.75,
+    "Tillage — < 30% residue (conventional tillage)": 1.00,
+    "Unknown — not recorded (conservative default)":  1.00,
+}
+
+RESIDUE_OPTIONS = list(RESIDUE_ADJUSTMENTS.keys())
+
 # NRCS cover crop species C-factor targets for Iowa (for report context)
 SPECIES_C_TARGETS = {
     "Cereal Rye":           0.10,
@@ -168,45 +183,55 @@ def classify_risk_zones(risk_array: np.ndarray) -> np.ndarray:
 
 
 def score_erosion_concern(
-    ndvi_mean: float,
-    slope_mean: float,
+    ndvi_stats: dict,
+    slope_stats: dict,
     ndvi_threshold: float = DEFAULT_THRESHOLDS["ndvi_low"],
     slope_threshold: float = DEFAULT_THRESHOLDS["slope_steep"],
+    residue_system: str = "Unknown — not recorded (conservative default)",
     ndvi_array: np.ndarray = None,
     slope_array: np.ndarray = None,
 ) -> Dict[str, Any]:
     """
     Score field-level erosion concern using RUSLE C x LS proxy.
 
+    Accepts ndvi_stats and slope_stats dicts (as returned by raster_stats()).
     When ndvi_array and slope_array are provided, concern_level is derived
-    from the distribution of pixel-level Risk Index scores across the field.
-    Mean-based c_factor, ls_factor, and rusle_score are retained for display.
+    from the distribution of pixel-level Risk Index scores.
+    residue_system applies a research-based multiplier to the NDVI-derived
+    C-factor to account for crop residue not captured by satellite imagery.
 
     Returns
     -------
     Dict with keys:
-        concern_level   : "Low" | "Moderate" | "High" | "Critical"
-        score           : int 1-4 (for color coding)
-        c_factor        : mean-based RUSLE C-factor (Iowa lookup)
-        ls_factor       : mean-based simplified LS-factor
-        rusle_score     : mean C × LS combined score
-        risk_array      : per-pixel Risk Index array (None if no arrays given)
-        zone_array      : per-pixel zone classification 1–4 (None if no arrays given)
-        low_cover       : bool (legacy)
-        steep_slope     : bool (legacy)
-        ndvi_threshold  : float (echoed back)
-        slope_threshold : float (echoed back)
-        recommendation  : str — plain-English NRCS advisory text
+        concern_level        : "Low" | "Moderate" | "High" | "Critical"
+        score                : int 1–4
+        c_factor             : residue-adjusted C-factor
+        c_factor_unadjusted  : NDVI-only C-factor before residue adjustment
+        residue_multiplier   : float multiplier applied
+        residue_system       : str label selected
+        ls_factor            : mean-based LS-factor
+        rusle_score          : adjusted C × LS
+        risk_array           : per-pixel Risk Index (None if no arrays given)
+        zone_array           : per-pixel zone 1–4 (None if no arrays given)
+        low_cover / steep_slope / ndvi_threshold / slope_threshold : legacy
+        recommendation       : plain-English advisory text
     """
-    c_factor    = _lookup_c_factor(ndvi_mean)
+    ndvi_mean  = ndvi_stats["mean"]
+    slope_mean = slope_stats["mean"]
+
+    c_factor_unadjusted = _lookup_c_factor(ndvi_mean)
+    residue_multiplier  = RESIDUE_ADJUSTMENTS.get(residue_system, 1.00)
+    c_factor_adjusted   = c_factor_unadjusted * residue_multiplier
+
     ls_factor   = _lookup_ls_factor(slope_mean)
-    rusle_score = c_factor * ls_factor
+    rusle_score = c_factor_adjusted * ls_factor
 
     risk_array_out = None
     zone_array_out = None
 
     if ndvi_array is not None and slope_array is not None:
-        risk_array_out = pixel_risk_index(ndvi_array, slope_array)
+        raw_risk       = pixel_risk_index(ndvi_array, slope_array)
+        risk_array_out = raw_risk * residue_multiplier
         zone_array_out = classify_risk_zones(risk_array_out)
         valid_mask  = ~np.isnan(zone_array_out)
         valid_count = valid_mask.sum()
@@ -252,18 +277,21 @@ def score_erosion_concern(
     }
 
     return {
-        "concern_level":   concern,
-        "score":           score_int,
-        "c_factor":        round(c_factor, 3),
-        "ls_factor":       round(ls_factor, 2),
-        "rusle_score":     round(rusle_score, 3),
-        "risk_array":      risk_array_out,
-        "zone_array":      zone_array_out,
-        "low_cover":       ndvi_mean < ndvi_threshold,
-        "steep_slope":     slope_mean > slope_threshold,
-        "ndvi_threshold":  ndvi_threshold,
-        "slope_threshold": slope_threshold,
-        "recommendation":  recommendations.get(concern, ""),
+        "concern_level":       concern,
+        "score":               score_int,
+        "c_factor":            round(c_factor_adjusted, 3),
+        "c_factor_unadjusted": round(c_factor_unadjusted, 3),
+        "residue_multiplier":  residue_multiplier,
+        "residue_system":      residue_system,
+        "ls_factor":           round(ls_factor, 2),
+        "rusle_score":         round(rusle_score, 3),
+        "risk_array":          risk_array_out,
+        "zone_array":          zone_array_out,
+        "low_cover":           ndvi_mean < ndvi_threshold,
+        "steep_slope":         slope_mean > slope_threshold,
+        "ndvi_threshold":      ndvi_threshold,
+        "slope_threshold":     slope_threshold,
+        "recommendation":      recommendations.get(concern, ""),
     }
 
 

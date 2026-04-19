@@ -230,6 +230,7 @@ def generate_field_report(
     previous_crop: Optional[str] = None,
     soil_series: Optional[str] = None,
     soil_k_factor: Optional[str] = None,
+    residue_system: Optional[str] = None,
 ) -> bytes:
     """
     Generate single-page PDF field summary report.
@@ -338,7 +339,7 @@ def generate_field_report(
             Paragraph(f"<b>Previous crop:</b> {previous_crop or 'Not recorded'}", body_style),
             Paragraph(f"<b>Termination date:</b> {termination_date or '⏳ Pending — document at termination'}", body_style),
             Paragraph(f"<b>Dominant soil series:</b> {_soil_display}", body_style),
-            Paragraph(f"<b>Data source:</b> USDA Web Soil Survey", body_style),
+            Paragraph(f"<b>Previous crop / tillage:</b> {residue_system or 'Not recorded'}", body_style),
         ],
     ]
     field_table = Table(field_data, colWidths=[1.75*inch]*4)
@@ -419,14 +420,25 @@ def generate_field_report(
     concern_col  = CONCERN_BADGE_COLOR.get(concern, TEXT_DARK)
     zone_acres   = calculate_zone_acres(ndvi_array, ndvi_threshold)
 
+    # Build C-factor display — show both values when residue adjustment applied
+    _c_adj   = risk_result.get("c_factor", 0)
+    _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
+    _c_mult  = risk_result.get("residue_multiplier", 1.0)
+    if _c_mult < 1.0:
+        _c_display = f"{_c_raw:.3f} → {_c_adj:.3f} (×{_c_mult:.2f} residue)"
+        _c_label   = "C-Factor (adj.)"
+    else:
+        _c_display = f"{_c_adj:.3f} (no residue adj.)"
+        _c_label   = "C-Factor (RUSLE)"
+
     # Metrics table
     metrics = [
         ["Metric", "Value"],
         ["NDVI Mean",          f"{ndvi_stats.get('mean', 0):.3f}"],
         ["NDVI Range",         f"{ndvi_stats.get('min',0):.3f} – {ndvi_stats.get('max',0):.3f}"],
         ["Slope Mean (%)",     f"{slope_stats.get('mean',0):.1f}%"],
-        ["C-Factor (RUSLE)",   f"{risk_result.get('c_factor', 0):.3f}"],
-        ["RUSLE C x LS Score", f"{risk_result.get('rusle_score', 0):.3f}"],
+        [_c_label,             _c_display],
+        ["Risk Index (C×LS)",  f"{risk_result.get('rusle_score', 0):.3f}"],
         ["Erosion Concern",    concern],
     ]
 
@@ -670,6 +682,12 @@ def generate_field_report(
         "C-Factor methodology: Iowa RUSLE lookup table — "
         "Laflen & Roose (1998), ISU Extension PM-1209. "
         "This report is advisory only and does not constitute an official NRCS determination.",
+        "C-Factor residue adjustment: CoverMap applies a research-based multiplier to the NDVI-derived "
+        "C-factor to account for crop residue protection not captured by satellite imagery. "
+        "Multipliers are calibrated to Iowa tillage system residue levels per ISU Extension PM-1901 "
+        "and NRCS RUSLE2 Iowa State File guidance. This adjustment is an agronomic estimate requiring "
+        "validation against site-specific RUSLE2 runs. Default multiplier = 1.00 (no adjustment) "
+        "when tillage system is unknown.",
         f"CoverMap · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
     ]
     for line in footer_lines:

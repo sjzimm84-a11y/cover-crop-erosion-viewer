@@ -27,6 +27,7 @@ from src.scoring import (
     pixel_level_concern,
     pixel_risk_index,
     classify_risk_zones,
+    RESIDUE_OPTIONS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report
@@ -177,6 +178,20 @@ with st.sidebar:
         0.0, 30.0, 9.0, 0.5,
         help="Iowa NRCS HEL threshold for Shelby County Monona-Nira-Ida soils. "
              "Adjust based on local soil survey data.",
+    )
+
+    st.divider()
+    st.markdown("### 🌽 Field Management")
+    residue_system = st.selectbox(
+        "Previous crop and tillage system",
+        options=RESIDUE_OPTIONS,
+        index=4,
+        help=(
+            "Select the previous crop and tillage system. "
+            "This adjusts the C-factor to account for residue "
+            "protection not captured by satellite NDVI. "
+            "Defaults to conservative (no adjustment) if unknown."
+        ),
     )
 
     st.divider()
@@ -510,10 +525,11 @@ C-factor is derived from satellite NDVI using Iowa cereal rye calibration. LS-fa
 ndvi_stats  = raster_stats(ndvi_array, ndvi_profile.get("nodata"))
 slope_stats = raster_stats(slope_percent)
 risk_result = score_erosion_concern(
-    ndvi_mean=ndvi_stats["mean"],
-    slope_mean=slope_stats["mean"],
+    ndvi_stats=ndvi_stats,
+    slope_stats=slope_stats,
     ndvi_threshold=ndvi_threshold,
     slope_threshold=slope_threshold,
+    residue_system=residue_system,
     ndvi_array=ndvi_array,
     slope_array=slope_percent,
 )
@@ -566,12 +582,25 @@ c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
 c3.metric("NDVI Max",       f"{ndvi_stats['max']:.3f}")
 c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.1f}%")
 c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
-          help="RUSLE C-factor from Iowa lookup table. Lower = better cover.")
+          help="RUSLE C-factor (residue-adjusted). Lower = better cover.")
 c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
           help="Unitless erosion risk index (C-factor × LS-factor). "
                "Scale: <0.3 Minimal · 0.3-0.7 Moderate · 0.7-1.5 High · >1.5 Critical")
 c7.metric("Dominant Soil",  _soil_label,
           help="Dominant soil series from USDA Web Soil Survey SSURGO")
+
+# Residue adjustment note
+if risk_result["residue_multiplier"] < 1.0:
+    st.caption(
+        f"C-Factor adjusted from {risk_result['c_factor_unadjusted']:.3f} to "
+        f"{risk_result['c_factor']:.3f} "
+        f"({int((1 - risk_result['residue_multiplier']) * 100)}% reduction for residue — "
+        f"{residue_system})"
+    )
+else:
+    st.caption(
+        "C-Factor: no residue adjustment applied (unknown or conventional tillage)"
+    )
 
 # NDVI freshness warning
 if ndvi_stats["mean"] > 0.75:
@@ -747,6 +776,7 @@ with col_dl1:
                     previous_crop=pdf_previous_crop or None,
                     soil_series=st.session_state.get("soil_series"),
                     soil_k_factor=st.session_state.get("soil_k_factor"),
+                    residue_system=residue_system,
                 )
                 st.download_button(
                     label="⬇️ Download PDF Report",
