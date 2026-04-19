@@ -163,9 +163,9 @@ def build_map_with_rasters(
         border-radius:8px;border:1px solid #30363d;
         font-family:monospace;font-size:12px;color:#c9d1d9;">
         <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
-        <span style="color:#F97316;">&#9632;</span> Low cover — reseed target<br>
-        <span style="color:#38BDF8;">&#9632;</span> Marginal stand<br>
-        <span style="color:#FACC15;">&#9632;</span> Good cover<br>
+        <span style="color:#F97316;">&#9632;</span> Low Cover<br>
+        <span style="color:#38BDF8;">&#9632;</span> Marginal<br>
+        <span style="color:#FACC15;">&#9632;</span> Good Cover<br>
         <hr style="border-color:#30363d;margin:6px 0;">
         <b style="color:#79c0ff;">Slope</b><br>
         <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
