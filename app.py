@@ -563,9 +563,16 @@ _s_earliest = st.session_state.ndvi_scene_earliest
 _s_count    = st.session_state.ndvi_scene_count
 if _s_latest:
     if _s_count and _s_count > 1 and _s_earliest and _s_earliest != _s_latest:
-        _image_date_str = f"{_s_count} scenes: {_s_earliest} – {_s_latest}"
+        _image_date_str = (
+            f"{_s_count} scenes composited: {_s_earliest} – {_s_latest}"
+        )
+    elif _s_count and _s_count == 1:
+        _image_date_str = (
+            f"1 scene: {_s_latest} — "
+            f"⚠️ single scene, cloud risk elevated"
+        )
     else:
-        _image_date_str = _s_latest
+        _image_date_str = f"Image date: {_s_latest}"
 else:
     _image_date_str = "Upload date unknown"
 
@@ -733,7 +740,7 @@ _ground_cover_status = (
 _eqip_rows = {
     "Cover crop present":    ("Sentinel-2 NDVI > 0.20",  _cover_status),
     "Field boundary":        ("Operator provided",        "📋 Verify against FSA CLU records"),
-    "Image date":            ("GEE metadata",             _image_date_str),
+    "Image date":            ("GEE metadata",             f"{_image_date_str} | {_valid_pct:.0f}% valid pixels"),
     "Estimated biomass":     ("NDVI proxy",               f"~{_biomass_low}–{_biomass_high} lb/acre (±40% NDVI proxy)"),
     "30% ground cover":      ("NDVI threshold",           _ground_cover_status),
     "Valid pixels":          ("NDVI > 0.05 threshold",    f"{'✅' if _valid_pct >= 75 else '⚠️'} {_valid_pct:.0f}% valid pixels ({'reliable' if _valid_pct >= 75 else 'below 75% — verify date range'})"),
