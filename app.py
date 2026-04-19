@@ -551,7 +551,19 @@ risk_result = score_erosion_concern(
     r_factor=st.session_state.get("r_factor", 150.0),
 )
 
-# Concern badge
+# Hoist image date string — used in Section 4 and PDF call
+_s_latest   = st.session_state.ndvi_scene_latest
+_s_earliest = st.session_state.ndvi_scene_earliest
+_s_count    = st.session_state.ndvi_scene_count
+if _s_latest:
+    if _s_count and _s_count > 1 and _s_earliest and _s_earliest != _s_latest:
+        _image_date_str = f"{_s_count} scenes: {_s_earliest} – {_s_latest}"
+    else:
+        _image_date_str = _s_latest
+else:
+    _image_date_str = "Upload date unknown"
+
+# === SECTION 2: EROSION CONCERN + ADVISORY ===
 badge_class = f"badge-{risk_result['concern_level'].lower()}"
 st.markdown(
     f"### Erosion Concern: "
@@ -559,15 +571,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Show actual Sentinel-2 flight/scene date(s) prominently
-_latest   = st.session_state.ndvi_scene_latest
-_earliest = st.session_state.ndvi_scene_earliest
-_count    = st.session_state.ndvi_scene_count
+_latest = st.session_state.ndvi_scene_latest
+_count  = st.session_state.ndvi_scene_count
 if _latest:
-    if _count and _count > 1 and _earliest and _earliest != _latest:
+    if _count and _count > 1 and _s_earliest and _s_earliest != _latest:
         _scene_label = (
             f"Latest flight: {_latest} "
-            f"({_count} scenes composited: {_earliest} – {_latest})"
+            f"({_count} scenes composited: {_s_earliest} – {_latest})"
         )
     else:
         _scene_label = f"Flight date: {_latest}"
@@ -578,109 +588,19 @@ elif st.session_state.ndvi_date_from and st.session_state.ndvi_date_to:
         f"{st.session_state.ndvi_date_to} via Sentinel-2 / Google Earth Engine"
     )
 
-# Recommendation box
-concern_colors = {
-    "Low": "✅", "Moderate": "⚠️", "High": "🔴", "Critical": "🚨"
-}
+concern_colors = {"Low": "✅", "Moderate": "⚠️", "High": "🔴", "Critical": "🚨"}
 icon = concern_colors.get(risk_result["concern_level"], "ℹ️")
-st.info(f"{icon} **NRCS Advisory:** {risk_result['recommendation']}")
+st.info(f"{icon} **CoverMap Advisory:** {risk_result['recommendation']}")
 
-# ---------------------------------------------------------------------------
-# Metrics row
-# ---------------------------------------------------------------------------
-st.subheader("📊 Field Summary")
-_soil_label = st.session_state.get("soil_series", "—") or "—"
-_soil_kf    = st.session_state.get("soil_k_factor")
-if _soil_kf:
-    _soil_label = f"{_soil_label} (K={_soil_kf})"
-c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-c1.metric("NDVI Mean",      f"{ndvi_stats['mean']:.3f}")
-c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
-c3.metric("NDVI Max",       f"{ndvi_stats['max']:.3f}")
-c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.1f}%")
-c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
-          help="RUSLE C-factor (residue-adjusted). Lower = better cover.")
-c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
-          help="Unitless erosion risk index (C-factor × LS-factor). "
-               "Scale: <0.3 Minimal · 0.3-0.7 Moderate · 0.7-1.5 High · >1.5 Critical")
-c7.metric("Dominant Soil",  _soil_label,
-          help="Dominant soil series from USDA Web Soil Survey SSURGO")
-
-# Residue adjustment note
-if risk_result["residue_multiplier"] < 1.0:
-    st.caption(
-        f"C-Factor adjusted from {risk_result['c_factor_unadjusted']:.3f} to "
-        f"{risk_result['c_factor']:.3f} "
-        f"({int((1 - risk_result['residue_multiplier']) * 100)}% reduction for residue — "
-        f"{residue_system})"
-    )
-else:
-    st.caption(
-        "C-Factor: no residue adjustment applied (unknown or conventional tillage)"
-    )
-
-# ---------------------------------------------------------------------------
-# Estimated Soil Loss vs. Soil Loss Tolerance
-# ---------------------------------------------------------------------------
-st.subheader("📊 Estimated Soil Loss vs. Soil Loss Tolerance")
-_sl_result = risk_result.get("soil_loss")
-if _sl_result and _sl_result.get("status_code") != "unavailable":
-    _sl  = _sl_result["soil_loss_tons_ac_yr"]
-    _tv  = _sl_result["t_value"]
-    _rt  = _sl_result["ratio_to_t"]
-    _sc  = _sl_result["status_code"]
-    sl1, sl2, sl3 = st.columns(3)
-    sl1.metric(
-        "Est. Soil Loss",
-        f"{_sl:.1f} t/ac/yr",
-        help="A = R × K × LS × C (simplified RUSLE; P=1.0 assumed)",
-    )
-    sl2.metric(
-        "Soil Loss Tolerance (T)",
-        f"{_tv} t/ac/yr",
-        help="NRCS tolerable soil loss limit for the dominant soil series",
-    )
-    sl3.metric(
-        "Ratio to T",
-        f"{_rt:.2f}×",
-        delta="Within T" if _sc == "within_t" else "Over T",
-        delta_color="normal" if _sc == "within_t" else "inverse",
-    )
-    _status_fn = {
-        "within_t": st.success,
-        "near_t":   st.warning,
-        "over_t":   st.error,
-        "critical_t": st.error,
-    }.get(_sc, st.info)
-    _status_fn(f"**{_sl_result['conservation_status']}**")
-    st.caption(f"Iowa R-factor: {st.session_state.get('r_factor_note', 'R=150 (standard Iowa)')}")
-    st.caption(
-        "⚠️ Simplified RUSLE estimate for advisory use only. "
-        "Not a substitute for a site-specific RUSLE2 run or official NRCS determination."
-    )
-else:
-    st.info(
-        "Soil loss estimate unavailable — K-factor not returned from USDA "
-        "Web Soil Survey for this field location."
-    )
-
-# NDVI freshness warning
-if ndvi_stats["mean"] > 0.75:
-    st.warning(
-        "⚠️ High NDVI may indicate mature cash crops rather than cover crops. "
-        "Verify image date — early spring pull recommended for accurate assessment."
-    )
-
-# ---------------------------------------------------------------------------
-# Zone risk summary
-# ---------------------------------------------------------------------------
+# === SECTION 3: FIELD RISK ZONE SUMMARY ===
 zone_summary = zone_risk_summary(
     ndvi_array, slope_percent,
     ndvi_threshold=ndvi_threshold,
     slope_threshold=slope_threshold,
     zone_array=risk_result.get("zone_array"),
 )
-st.subheader("📋 Zone Risk Summary")
+
+st.subheader("📋 Cover Crop Stand — NDVI Zone Summary")
 zone_summary_display = zone_summary.copy()
 if "slope_mean" in zone_summary_display.columns:
     zone_summary_display["slope_mean"] = zone_summary_display["slope_mean"].apply(
@@ -692,7 +612,26 @@ zone_summary_display = zone_summary_display.rename(columns={
     "ndvi_mean":  "NDVI Mean",
     "slope_mean": "Slope Mean (3m DEM, UTM)",
 })
-st.dataframe(zone_summary_display, width='stretch')
+
+# Dynamic NDVI zone labels based on current threshold slider
+ndvi_low_label  = f"Low Cover (NDVI < {ndvi_threshold:.2f})"
+ndvi_mid_upper  = ndvi_threshold + 0.15
+ndvi_mid_label  = f"Marginal (NDVI {ndvi_threshold:.2f}–{ndvi_mid_upper:.2f})"
+ndvi_good_label = f"Good Cover (NDVI > {ndvi_mid_upper:.2f})"
+zone_label_map = {
+    "Low cover":                 ndvi_low_label,
+    "Low cover — reseed target": ndvi_low_label,
+    "Marginal stand":            ndvi_mid_label,
+    "Marginal":                  ndvi_mid_label,
+    "Good cover":                ndvi_good_label,
+}
+zone_summary_display["Zone"] = (
+    zone_summary_display["Zone"]
+    .map(zone_label_map)
+    .fillna(zone_summary_display["Zone"])
+)
+
+st.dataframe(zone_summary_display, hide_index=True, use_container_width=True)
 
 zone_chart = build_zone_risk_chart(zone_summary)
 zone_chart.update_layout(
@@ -700,9 +639,55 @@ zone_chart.update_layout(
 )
 st.plotly_chart(zone_chart, width='stretch')
 
-# ---------------------------------------------------------------------------
-# Cover Crop Stand Assessment
-# ---------------------------------------------------------------------------
+# Risk Index zone table (C×LS pixel distribution)
+zone_counts  = risk_result.get("zone_counts", {})
+total_pixels = sum(zone_counts.values())
+
+if zone_counts and total_pixels > 0:
+    pixel_size_m    = 10.0
+    acres_per_pixel = (pixel_size_m ** 2) / 4046.86
+
+    risk_zone_rows = []
+    risk_zone_config = [
+        (4, "Critical Risk",  "#EF4444", "> 1.5"),
+        (3, "High Risk",      "#F97316", "0.7–1.5"),
+        (2, "Moderate Risk",  "#FACC15", "0.3–0.7"),
+        (1, "Low Risk",       "#22C55E", "< 0.3"),
+    ]
+    for zone_val, label, _color, threshold in risk_zone_config:
+        count = zone_counts.get(zone_val, 0)
+        acres = count * acres_per_pixel
+        pct   = count / total_pixels * 100
+        risk_zone_rows.append({
+            "Zone":       label,
+            "C×LS Range": threshold,
+            "Acres":      f"{acres:.1f}",
+            "% of Field": f"{pct:.0f}%",
+        })
+
+    risk_zone_df = pd.DataFrame(risk_zone_rows)
+
+    st.subheader("📊 Erosion Risk Zone Summary (C×LS)")
+    st.dataframe(
+        risk_zone_df,
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "Risk Index = C-factor (from NDVI) × LS-factor "
+        "(from slope). Unitless composite erosion "
+        "vulnerability score. Critical > 1.5 · "
+        "High 0.7–1.5 · Moderate 0.3–0.7 · Low < 0.3"
+    )
+else:
+    st.info(
+        "ℹ️ Risk Index zone distribution requires "
+        "pixel-level C×LS computation. Ensure "
+        "risk_zone_array is being passed to the "
+        "scoring pipeline."
+    )
+
+# === SECTION 4: COVER CROP STAND ASSESSMENT ===
 st.subheader("📋 Cover Crop Stand Assessment — Satellite Documentation")
 
 _ndvi_mean     = ndvi_stats["mean"]
@@ -728,17 +713,6 @@ elif _valid_pct < 75:
 if _valid_warning:
     st.warning(_valid_warning)
 
-_s_latest   = st.session_state.ndvi_scene_latest
-_s_earliest = st.session_state.ndvi_scene_earliest
-_s_count    = st.session_state.ndvi_scene_count
-if _s_latest:
-    if _s_count and _s_count > 1 and _s_earliest and _s_earliest != _s_latest:
-        _image_date_str = f"{_s_count} scenes: {_s_earliest} – {_s_latest}"
-    else:
-        _image_date_str = _s_latest
-else:
-    _image_date_str = "Upload date unknown"
-
 _cover_status = (
     f"✅ NDVI {_ndvi_mean:.3f} — cover crop confirmed"
     if _ndvi_mean > 0.20 else
@@ -751,32 +725,110 @@ _ground_cover_status = (
 )
 
 _eqip_rows = {
-    "Cover crop present":    ("Sentinel-2 NDVI > 0.20",   _cover_status),
-    "Field boundary":        ("Operator provided",         "📋 Verify against FSA CLU records"),
-    "Image date":            ("GEE metadata",              _image_date_str),
-    "Estimated biomass":     ("NDVI proxy",                f"~{_biomass_low}–{_biomass_high} lb/acre (±40% NDVI proxy)"),
-    "30% ground cover":      ("NDVI threshold",            _ground_cover_status),
-    "Valid pixels":          ("NDVI > 0.05 threshold",     f"{'✅' if _valid_pct >= 75 else '⚠️'} {_valid_pct:.0f}% valid pixels ({'reliable' if _valid_pct >= 75 else 'below 75% — verify date range'})"),
-    "Seeding rate":          ("Field records required",    "📋 CCA to verify on-site"),
-    "Species confirmation":  ("Field records required",    "📋 CCA to verify on-site"),
-    "Termination date":      ("Not yet applicable",        "⏳ Pending — document at termination"),
-    "Cooperator signature":  ("Physical form required",    "📋 Required for EQIP submission"),
+    "Cover crop present":    ("Sentinel-2 NDVI > 0.20",  _cover_status),
+    "Field boundary":        ("Operator provided",        "📋 Verify against FSA CLU records"),
+    "Image date":            ("GEE metadata",             _image_date_str),
+    "Estimated biomass":     ("NDVI proxy",               f"~{_biomass_low}–{_biomass_high} lb/acre (±40% NDVI proxy)"),
+    "30% ground cover":      ("NDVI threshold",           _ground_cover_status),
+    "Valid pixels":          ("NDVI > 0.05 threshold",    f"{'✅' if _valid_pct >= 75 else '⚠️'} {_valid_pct:.0f}% valid pixels ({'reliable' if _valid_pct >= 75 else 'below 75% — verify date range'})"),
+    "Seeding rate":          ("Field records required",   "📋 CCA to verify on-site"),
+    "Species confirmation":  ("Field records required",   "📋 CCA to verify on-site"),
+    "Termination date":      ("Not yet applicable",       "⏳ Pending — document at termination"),
+    "Cooperator signature":  ("Physical form required",   "📋 Required for EQIP submission"),
 }
 
 _eqip_df = pd.DataFrame(
-    [(req, src, status) for req, (src, status) in _eqip_rows.items()],
+    [(req, src, stat) for req, (src, stat) in _eqip_rows.items()],
     columns=["Requirement", "Data Source", "Status"],
 )
-st.dataframe(_eqip_df, hide_index=True, width='stretch')
+st.dataframe(_eqip_df, hide_index=True, use_container_width=True)
 st.caption(
     "Remote sensing confirms spatial cover crop presence. "
     "Seeding rate, species, and termination compliance require CCA field verification "
     "per NRCS Practice Code 340."
 )
 
-# ---------------------------------------------------------------------------
-# Report export — PDF + CSV
-# ---------------------------------------------------------------------------
+# === SECTION 5: COVER CROP METRICS ===
+st.subheader("📊 Cover Crop Metrics")
+_soil_label = st.session_state.get("soil_series", "—") or "—"
+_soil_kf    = st.session_state.get("soil_k_factor")
+if _soil_kf:
+    _soil_label = f"{_soil_label} (K={_soil_kf})"
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+c1.metric("NDVI Mean",      f"{ndvi_stats['mean']:.3f}")
+c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
+c3.metric("NDVI Max",       f"{ndvi_stats['max']:.3f}")
+c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.1f}%")
+c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
+          help="RUSLE C-factor (residue-adjusted). Lower = better cover.")
+c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
+          help="Unitless erosion risk index (C-factor × LS-factor). "
+               "Scale: <0.3 Minimal · 0.3-0.7 Moderate · 0.7-1.5 High · >1.5 Critical")
+c7.metric("Dominant Soil",  _soil_label,
+          help="Dominant soil series from USDA Web Soil Survey SSURGO")
+
+if risk_result["residue_multiplier"] < 1.0:
+    st.caption(
+        f"C-Factor adjusted from {risk_result['c_factor_unadjusted']:.3f} to "
+        f"{risk_result['c_factor']:.3f} "
+        f"({int((1 - risk_result['residue_multiplier']) * 100)}% reduction for residue — "
+        f"{residue_system})"
+    )
+else:
+    st.caption(
+        "C-Factor: no residue adjustment applied (unknown or conventional tillage)"
+    )
+
+if ndvi_stats["mean"] > 0.75:
+    st.warning(
+        "⚠️ High NDVI may indicate mature cash crops rather than cover crops. "
+        "Verify image date — early spring pull recommended for accurate assessment."
+    )
+
+# === SECTION 6: ESTIMATED SOIL LOSS ===
+st.subheader("📊 Estimated Soil Loss vs. Soil Loss Tolerance")
+_sl_result = risk_result.get("soil_loss")
+if _sl_result and _sl_result.get("status_code") != "unavailable":
+    _sl = _sl_result["soil_loss_tons_ac_yr"]
+    _tv = _sl_result["t_value"]
+    _rt = _sl_result["ratio_to_t"]
+    _sc = _sl_result["status_code"]
+    sl1, sl2, sl3 = st.columns(3)
+    sl1.metric(
+        "Est. Soil Loss",
+        f"{_sl:.1f} t/ac/yr",
+        help="A = R × K × LS × C (simplified RUSLE; P=1.0 assumed)",
+    )
+    sl2.metric(
+        "Soil Loss Tolerance (T)",
+        f"{_tv} t/ac/yr",
+        help="NRCS tolerable soil loss limit for the dominant soil series",
+    )
+    sl3.metric(
+        "Ratio to T",
+        f"{_rt:.2f}×",
+        delta="Within T" if _sc == "within_t" else "Over T",
+        delta_color="normal" if _sc == "within_t" else "inverse",
+    )
+    _status_fn = {
+        "within_t":   st.success,
+        "near_t":     st.warning,
+        "over_t":     st.error,
+        "critical_t": st.error,
+    }.get(_sc, st.info)
+    _status_fn(f"**{_sl_result['conservation_status']}**")
+    st.caption(f"Iowa R-factor: {st.session_state.get('r_factor_note', 'R=150 (standard Iowa)')}")
+    st.caption(
+        "⚠️ Simplified RUSLE estimate for advisory use only. "
+        "Not a substitute for a site-specific RUSLE2 run or official NRCS determination."
+    )
+else:
+    st.info(
+        "Soil loss estimate unavailable — K-factor not returned from USDA "
+        "Web Soil Survey for this field location."
+    )
+
+# === SECTION 7: GENERATE REPORT ===
 report_df = pd.DataFrame([
     {"Metric": "NDVI Mean",        "Value": ndvi_stats["mean"]},
     {"Metric": "NDVI Min",         "Value": ndvi_stats["min"]},

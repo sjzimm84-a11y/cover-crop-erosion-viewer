@@ -8,7 +8,8 @@
       "Bash(python -m py_compile src/report_generator.py)",
       "Bash(python -m py_compile src/raster_utils.py)",
       "Bash(python -m py_compile src/visualization.py)",
-      "Bash(python -c \"from src.scoring import get_iowa_r_factor, estimate_soil_loss, IOWA_R_FACTOR_175_COUNTIES, IOWA_T_VALUES; print\\('imports OK'\\); print\\('R-factor counties:', len\\(IOWA_R_FACTOR_175_COUNTIES\\)\\); print\\('T-values:', IOWA_T_VALUES\\)\")"
+      "Bash(python -c \"from src.scoring import get_iowa_r_factor, estimate_soil_loss, IOWA_R_FACTOR_175_COUNTIES, IOWA_T_VALUES; print\\('imports OK'\\); print\\('R-factor counties:', len\\(IOWA_R_FACTOR_175_COUNTIES\\)\\); print\\('T-values:', IOWA_T_VALUES\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

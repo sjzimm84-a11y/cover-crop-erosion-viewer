@@ -408,6 +408,11 @@ def score_erosion_concern(
         ),
     }
 
+    zone_counts_out: Dict[int, int] = {}
+    if zone_array_out is not None:
+        for _z in (1, 2, 3, 4):
+            zone_counts_out[_z] = int(np.sum(zone_array_out == _z))
+
     return {
         "concern_level":       concern,
         "score":               score_int,
@@ -419,6 +424,7 @@ def score_erosion_concern(
         "rusle_score":         round(rusle_score, 3),
         "risk_array":          risk_array_out,
         "zone_array":          zone_array_out,
+        "zone_counts":         zone_counts_out,
         "soil_loss":           soil_loss_result,
         "low_cover":           ndvi_mean < ndvi_threshold,
         "steep_slope":         slope_mean > slope_threshold,
