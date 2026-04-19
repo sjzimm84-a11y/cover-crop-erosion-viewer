@@ -33,7 +33,7 @@ Limitation — LS-factor:
     future version.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -97,6 +97,37 @@ RESIDUE_ADJUSTMENTS = {
 
 RESIDUE_OPTIONS = list(RESIDUE_ADJUSTMENTS.keys())
 
+# ---------------------------------------------------------------------------
+# Iowa R-factor zones — annual erosivity index (MJ·mm/ha·hr·yr)
+# Southeast Iowa receives R=175; remaining Iowa counties use R=150.
+# Source: NRCS RUSLE2 Iowa State File; ISU Extension PM-1209
+# ---------------------------------------------------------------------------
+IOWA_R_FACTOR_175_COUNTIES = {
+    "appanoose", "cedar", "clinton", "davis", "des moines", "delaware",
+    "dubuque", "henry", "iowa", "jackson", "jefferson", "johnson",
+    "jones", "keokuk", "lee", "linn", "louisa", "mahaska",
+    "monroe", "muscatine", "scott", "van buren", "wapello",
+    "washington", "wayne",
+}
+
+# ---------------------------------------------------------------------------
+# Iowa soil loss tolerance (T-value) by dominant series
+# T = tolerable annual soil loss in tons/acre/year (NRCS SSURGO default = 5)
+# Source: USDA NRCS SSURGO; ISU Extension Iowa Soil Properties
+# ---------------------------------------------------------------------------
+IOWA_T_VALUES: Dict[str, int] = {
+    "Monona":   5,
+    "Ida":      4,
+    "Judson":   5,
+    "Burchard": 5,
+    "Tama":     5,
+    "Clarion":  5,
+    "Nicollet": 5,
+    "Webster":  5,
+    "Canisteo": 5,
+    "default":  5,
+}
+
 # NRCS cover crop species C-factor targets for Iowa (for report context)
 SPECIES_C_TARGETS = {
     "Cereal Rye":           0.10,
@@ -107,6 +138,90 @@ SPECIES_C_TARGETS = {
     "Legume Blend":         0.22,
     "Bare Soil (no cover)": 0.95,
 }
+
+
+def get_iowa_r_factor(boundary_gdf) -> tuple:
+    """
+    Look up Iowa R-factor zone from field centroid using FCC Census Block API.
+    Returns (r_factor: float, source_note: str).
+    Southeast Iowa counties use R=175; all others R=150.
+    Falls back to R=150 if the API call fails.
+    """
+    import urllib.request
+    import json as _json
+
+    try:
+        centroid = boundary_gdf.to_crs("EPSG:4326").geometry.centroid.iloc[0]
+        lat, lon = centroid.y, centroid.x
+        url = (
+            f"https://geo.fcc.gov/api/census/block/find"
+            f"?latitude={lat:.6f}&longitude={lon:.6f}&format=json"
+        )
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = _json.loads(resp.read())
+        county_raw  = data.get("County", {}).get("name", "")
+        county_name = county_raw.lower().replace(" county", "").strip()
+        if county_name in IOWA_R_FACTOR_175_COUNTIES:
+            return (175.0, f"R=175 (southeast Iowa — {county_name.title()} County)")
+        note = (
+            f"R=150 (standard Iowa — {county_name.title()} County)"
+            if county_name else "R=150 (standard Iowa zone)"
+        )
+        return (150.0, note)
+    except Exception:
+        return (150.0, "R=150 (default — county lookup unavailable)")
+
+
+def estimate_soil_loss(
+    c_factor: float,
+    ls_factor: float,
+    k_factor: Any,
+    t_value: int = 5,
+    r_factor: float = 150.0,
+) -> Dict[str, Any]:
+    """
+    Estimate annual soil loss using simplified RUSLE: A = R × K × LS × C × P.
+    P-factor = 1.0 (no conservation practice factor applied).
+    Returns dict with soil_loss_tons_ac_yr, t_value, ratio_to_t,
+    conservation_status, and status_code.
+    """
+    try:
+        k = float(k_factor)
+    except (TypeError, ValueError):
+        return {
+            "soil_loss_tons_ac_yr": None,
+            "t_value":              t_value,
+            "ratio_to_t":          None,
+            "conservation_status": "K-factor unavailable — soil loss not estimated",
+            "status_code":         "unavailable",
+        }
+
+    soil_loss = r_factor * k * ls_factor * c_factor  # P = 1.0
+    ratio     = soil_loss / t_value if t_value > 0 else None
+
+    if ratio is None:
+        status_code = "unavailable"
+        status = "T-value unavailable"
+    elif ratio <= 1.0:
+        status_code = "within_t"
+        status = f"Within T — {soil_loss:.1f} t/ac/yr ≤ T={t_value}"
+    elif ratio <= 1.25:
+        status_code = "near_t"
+        status = f"Near T — {soil_loss:.1f} t/ac/yr (T={t_value})"
+    elif ratio <= 2.0:
+        status_code = "over_t"
+        status = f"Exceeds T — {soil_loss:.1f} t/ac/yr ({ratio:.1f}× T={t_value})"
+    else:
+        status_code = "critical_t"
+        status = f"Critical — {soil_loss:.1f} t/ac/yr ({ratio:.1f}× T={t_value})"
+
+    return {
+        "soil_loss_tons_ac_yr": round(soil_loss, 2),
+        "t_value":              t_value,
+        "ratio_to_t":          round(ratio, 2) if ratio is not None else None,
+        "conservation_status": status,
+        "status_code":         status_code,
+    }
 
 
 def _lookup_c_factor(ndvi_mean: float) -> float:
@@ -190,6 +305,9 @@ def score_erosion_concern(
     residue_system: str = "Unknown — not recorded (conservative default)",
     ndvi_array: np.ndarray = None,
     slope_array: np.ndarray = None,
+    k_factor: Any = None,
+    soil_series: str = "default",
+    r_factor: float = 150.0,
 ) -> Dict[str, Any]:
     """
     Score field-level erosion concern using RUSLE C x LS proxy.
@@ -199,6 +317,8 @@ def score_erosion_concern(
     from the distribution of pixel-level Risk Index scores.
     residue_system applies a research-based multiplier to the NDVI-derived
     C-factor to account for crop residue not captured by satellite imagery.
+    When k_factor is provided, estimate_soil_loss() is called and the result
+    is included in the return dict under the "soil_loss" key.
 
     Returns
     -------
@@ -213,6 +333,7 @@ def score_erosion_concern(
         rusle_score          : adjusted C × LS
         risk_array           : per-pixel Risk Index (None if no arrays given)
         zone_array           : per-pixel zone 1–4 (None if no arrays given)
+        soil_loss            : dict from estimate_soil_loss() (None if k_factor missing)
         low_cover / steep_slope / ndvi_threshold / slope_threshold : legacy
         recommendation       : plain-English advisory text
     """
@@ -225,6 +346,17 @@ def score_erosion_concern(
 
     ls_factor   = _lookup_ls_factor(slope_mean)
     rusle_score = c_factor_adjusted * ls_factor
+
+    # Soil loss estimation (A = R × K × LS × C)
+    _series_key      = (soil_series or "default").split()[0]
+    t_value          = IOWA_T_VALUES.get(_series_key, IOWA_T_VALUES["default"])
+    soil_loss_result = estimate_soil_loss(
+        c_factor=c_factor_adjusted,
+        ls_factor=ls_factor,
+        k_factor=k_factor,
+        t_value=t_value,
+        r_factor=r_factor,
+    )
 
     risk_array_out = None
     zone_array_out = None
@@ -287,6 +419,7 @@ def score_erosion_concern(
         "rusle_score":         round(rusle_score, 3),
         "risk_array":          risk_array_out,
         "zone_array":          zone_array_out,
+        "soil_loss":           soil_loss_result,
         "low_cover":           ndvi_mean < ndvi_threshold,
         "steep_slope":         slope_mean > slope_threshold,
         "ndvi_threshold":      ndvi_threshold,

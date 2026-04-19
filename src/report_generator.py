@@ -231,6 +231,9 @@ def generate_field_report(
     soil_series: Optional[str] = None,
     soil_k_factor: Optional[str] = None,
     residue_system: Optional[str] = None,
+    soil_loss_result: Optional[Dict[str, Any]] = None,
+    r_factor: float = 150.0,
+    r_factor_note: Optional[str] = None,
 ) -> bytes:
     """
     Generate single-page PDF field summary report.
@@ -623,6 +626,77 @@ def generate_field_report(
         "verification per NRCS Practice Code 340.</i>",
         small_style,
     ))
+    story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
+    # ESTIMATED SOIL LOSS vs. SOIL LOSS TOLERANCE
+    # -----------------------------------------------------------------------
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("Estimated Soil Loss vs. Soil Loss Tolerance", section_style))
+
+    if soil_loss_result and soil_loss_result.get("status_code") != "unavailable":
+        _sl  = soil_loss_result.get("soil_loss_tons_ac_yr", 0)
+        _tv  = soil_loss_result.get("t_value", 5)
+        _rt  = soil_loss_result.get("ratio_to_t", 0)
+        _sc  = soil_loss_result.get("status_code", "over_t")
+        _status_text = soil_loss_result.get("conservation_status", "")
+
+        sl_metrics = [
+            ["Est. Soil Loss (A)", "Soil Loss Tolerance (T)", "Ratio to T", "Status"],
+            [
+                f"{_sl:.1f} t/ac/yr",
+                f"{_tv} t/ac/yr",
+                f"{_rt:.2f}×",
+                _status_text,
+            ],
+        ]
+        _status_bg = {
+            "within_t":   colors.HexColor("#dcfce7"),
+            "near_t":     colors.HexColor("#fef9c3"),
+            "over_t":     colors.HexColor("#fee2e2"),
+            "critical_t": colors.HexColor("#fecaca"),
+        }.get(_sc, LIGHT_GRAY)
+        _status_fg = {
+            "within_t":   GREEN_BADGE,
+            "near_t":     AMBER_BADGE,
+            "over_t":     RED_BADGE,
+            "critical_t": colors.HexColor("#6e1c1c"),
+        }.get(_sc, TEXT_DARK)
+
+        sl_table = Table(
+            [[Paragraph(str(cell), body_style) for cell in row] for row in sl_metrics],
+            colWidths=[1.5*inch, 1.5*inch, 1.0*inch, 3.0*inch],
+        )
+        sl_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("BACKGROUND",    (0, 1), (-1, 1),  _status_bg),
+            ("TEXTCOLOR",     (3, 1), (3, 1),   _status_fg),
+            ("FONTNAME",      (3, 1), (3, 1),   "Helvetica-Bold"),
+            ("ALIGN",         (0, 0), (2, -1),  "CENTER"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ]))
+        story.append(sl_table)
+        _r_note = r_factor_note or f"R={r_factor:.0f} (Iowa erosivity index)"
+        story.append(Paragraph(
+            f"<i>Iowa R-factor: {_r_note} | "
+            f"A = R × K × LS × C (P=1.0). Simplified RUSLE estimate for advisory "
+            f"use only — not a substitute for a site-specific RUSLE2 run or official "
+            f"NRCS determination.</i>",
+            small_style,
+        ))
+    else:
+        story.append(Paragraph(
+            "Soil loss estimate unavailable — K-factor not returned from USDA "
+            "Web Soil Survey for this field location.",
+            body_style,
+        ))
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------

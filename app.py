@@ -120,6 +120,18 @@ if "ndvi_source" not in st.session_state:
 with st.sidebar:
     st.markdown("### 📍 Field Setup")
 
+    residue_system = st.selectbox(
+        "Previous crop and tillage system",
+        options=RESIDUE_OPTIONS,
+        index=4,
+        help=(
+            "Select the previous crop and tillage system. "
+            "This adjusts the C-factor to account for residue "
+            "protection not captured by satellite NDVI. "
+            "Defaults to conservative (no adjustment) if unknown."
+        ),
+    )
+
     boundary_file = st.file_uploader(
         "Upload field boundary",
         type=["geojson", "json", "zip", "kml"],
@@ -178,20 +190,6 @@ with st.sidebar:
         0.0, 30.0, 9.0, 0.5,
         help="Iowa NRCS HEL threshold for Shelby County Monona-Nira-Ida soils. "
              "Adjust based on local soil survey data.",
-    )
-
-    st.divider()
-    st.markdown("### 🌽 Field Management")
-    residue_system = st.selectbox(
-        "Previous crop and tillage system",
-        options=RESIDUE_OPTIONS,
-        index=4,
-        help=(
-            "Select the previous crop and tillage system. "
-            "This adjusts the C-factor to account for residue "
-            "protection not captured by satellite NDVI. "
-            "Defaults to conservative (no adjustment) if unknown."
-        ),
     )
 
     st.divider()
@@ -432,7 +430,7 @@ if ndvi_array.shape != slope_percent.shape:
     slope_percent = slope_resampled
 
 # ---------------------------------------------------------------------------
-# WSS dominant soil series lookup (Change 2)
+# WSS dominant soil series lookup
 # ---------------------------------------------------------------------------
 try:
     from src.wss_utils import get_dominant_soil_series
@@ -442,6 +440,18 @@ try:
 except Exception:
     st.session_state.soil_series   = "Not available"
     st.session_state.soil_k_factor = None
+
+# ---------------------------------------------------------------------------
+# Iowa R-factor zone lookup (FCC Census Block API)
+# ---------------------------------------------------------------------------
+try:
+    from src.scoring import get_iowa_r_factor
+    _r_factor, _r_factor_note = get_iowa_r_factor(field_boundary)
+    st.session_state.r_factor      = _r_factor
+    st.session_state.r_factor_note = _r_factor_note
+except Exception:
+    st.session_state.r_factor      = 150.0
+    st.session_state.r_factor_note = "R=150 (default — county lookup failed)"
 
 # ---------------------------------------------------------------------------
 # Map
@@ -469,6 +479,10 @@ if "soil_series" not in st.session_state:
     st.session_state.soil_series = "Not available"
 if "soil_k_factor" not in st.session_state:
     st.session_state.soil_k_factor = None
+if "r_factor" not in st.session_state:
+    st.session_state.r_factor = 150.0
+if "r_factor_note" not in st.session_state:
+    st.session_state.r_factor_note = "R=150 (standard Iowa zone)"
 
 
 _risk_zone_preview = classify_risk_zones(pixel_risk_index(ndvi_array, slope_percent))
@@ -532,6 +546,9 @@ risk_result = score_erosion_concern(
     residue_system=residue_system,
     ndvi_array=ndvi_array,
     slope_array=slope_percent,
+    k_factor=st.session_state.get("soil_k_factor"),
+    soil_series=st.session_state.get("soil_series", "default"),
+    r_factor=st.session_state.get("r_factor", 150.0),
 )
 
 # Concern badge
@@ -600,6 +617,51 @@ if risk_result["residue_multiplier"] < 1.0:
 else:
     st.caption(
         "C-Factor: no residue adjustment applied (unknown or conventional tillage)"
+    )
+
+# ---------------------------------------------------------------------------
+# Estimated Soil Loss vs. Soil Loss Tolerance
+# ---------------------------------------------------------------------------
+st.subheader("📊 Estimated Soil Loss vs. Soil Loss Tolerance")
+_sl_result = risk_result.get("soil_loss")
+if _sl_result and _sl_result.get("status_code") != "unavailable":
+    _sl  = _sl_result["soil_loss_tons_ac_yr"]
+    _tv  = _sl_result["t_value"]
+    _rt  = _sl_result["ratio_to_t"]
+    _sc  = _sl_result["status_code"]
+    sl1, sl2, sl3 = st.columns(3)
+    sl1.metric(
+        "Est. Soil Loss",
+        f"{_sl:.1f} t/ac/yr",
+        help="A = R × K × LS × C (simplified RUSLE; P=1.0 assumed)",
+    )
+    sl2.metric(
+        "Soil Loss Tolerance (T)",
+        f"{_tv} t/ac/yr",
+        help="NRCS tolerable soil loss limit for the dominant soil series",
+    )
+    sl3.metric(
+        "Ratio to T",
+        f"{_rt:.2f}×",
+        delta="Within T" if _sc == "within_t" else "Over T",
+        delta_color="normal" if _sc == "within_t" else "inverse",
+    )
+    _status_fn = {
+        "within_t": st.success,
+        "near_t":   st.warning,
+        "over_t":   st.error,
+        "critical_t": st.error,
+    }.get(_sc, st.info)
+    _status_fn(f"**{_sl_result['conservation_status']}**")
+    st.caption(f"Iowa R-factor: {st.session_state.get('r_factor_note', 'R=150 (standard Iowa)')}")
+    st.caption(
+        "⚠️ Simplified RUSLE estimate for advisory use only. "
+        "Not a substitute for a site-specific RUSLE2 run or official NRCS determination."
+    )
+else:
+    st.info(
+        "Soil loss estimate unavailable — K-factor not returned from USDA "
+        "Web Soil Survey for this field location."
     )
 
 # NDVI freshness warning
@@ -777,6 +839,9 @@ with col_dl1:
                     soil_series=st.session_state.get("soil_series"),
                     soil_k_factor=st.session_state.get("soil_k_factor"),
                     residue_system=residue_system,
+                    soil_loss_result=risk_result.get("soil_loss"),
+                    r_factor=st.session_state.get("r_factor", 150.0),
+                    r_factor_note=st.session_state.get("r_factor_note"),
                 )
                 st.download_button(
                     label="⬇️ Download PDF Report",
