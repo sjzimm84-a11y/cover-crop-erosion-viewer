@@ -251,11 +251,13 @@ def _concern_level(rusle_score: float) -> str:
 def pixel_risk_index(
     ndvi_array: np.ndarray,
     slope_array: np.ndarray,
+    residue_multiplier: float = 1.0,
 ) -> np.ndarray:
     """
     Compute per-pixel RUSLE Risk Index (C x LS) for every pixel in the field.
     Returns array of same shape as inputs.
-    C-factor derived from NDVI via Iowa lookup table.
+    C-factor derived from NDVI via Iowa lookup table, then scaled by
+    residue_multiplier to match field-level C-factor adjustment.
     LS-factor derived from slope percent via simplified lookup.
     """
     c_array = np.full(ndvi_array.shape, np.nan, dtype=float)
@@ -265,6 +267,7 @@ def pixel_risk_index(
     c_array = np.where((ndvi_array >= 0.35) & (ndvi_array < 0.50),           0.20, c_array)
     c_array = np.where((ndvi_array >= 0.50) & (ndvi_array < 0.65),           0.08, c_array)
     c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
+    c_array = c_array * residue_multiplier
 
     ls_array = np.full(slope_array.shape, np.nan, dtype=float)
     ls_array = np.where(slope_array < 2,                                      0.2,  ls_array)
@@ -410,8 +413,13 @@ def score_erosion_concern(
 
     zone_counts_out: Dict[int, int] = {}
     if zone_array_out is not None:
-        for _z in (1, 2, 3, 4):
-            zone_counts_out[_z] = int(np.sum(zone_array_out == _z))
+        valid_mask = ~np.isnan(ndvi_array)
+        zone_counts_out = {
+            1: int(np.sum((zone_array_out == 1) & valid_mask)),
+            2: int(np.sum((zone_array_out == 2) & valid_mask)),
+            3: int(np.sum((zone_array_out == 3) & valid_mask)),
+            4: int(np.sum((zone_array_out == 4) & valid_mask)),
+        }
 
     return {
         "concern_level":       concern,

@@ -28,6 +28,7 @@ from src.scoring import (
     pixel_risk_index,
     classify_risk_zones,
     RESIDUE_OPTIONS,
+    RESIDUE_ADJUSTMENTS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report
@@ -485,7 +486,12 @@ if "r_factor_note" not in st.session_state:
     st.session_state.r_factor_note = "R=150 (standard Iowa zone)"
 
 
-_risk_zone_preview = classify_risk_zones(pixel_risk_index(ndvi_array, slope_percent))
+# Use residue-adjusted C-factor for map — matches table computation
+_risk_index_array = pixel_risk_index(
+    ndvi_array, slope_percent,
+    residue_multiplier=RESIDUE_ADJUSTMENTS.get(residue_system, 1.0)
+)
+_risk_zone_preview = classify_risk_zones(_risk_index_array)
 
 folium_map = build_map_with_rasters(
     field_boundary, ndvi_array, slope_percent,
