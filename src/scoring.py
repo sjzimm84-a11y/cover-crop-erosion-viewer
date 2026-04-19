@@ -24,6 +24,13 @@ NDVI-to-C-factor calibration:
     Source: Iowa RUSLE C-factor calibration to cereal rye biomass thresholds per
     national cereal rye database (mean 3,428 kg/ha) and NRCS Practice Code 340
     minimum of 1,500 kg/ha at approximately NDVI 0.25.
+
+Limitation — LS-factor:
+    Slope length is not explicitly computed — LS-factor is derived from per-pixel
+    slope percent using a simplified lookup table. This produces spatially explicit
+    Risk Index values appropriate for field advisory use. True RUSLE LS-factor
+    requires slope length from flow accumulation analysis and is planned for a
+    future version.
 """
 
 from typing import Dict, Any
@@ -111,44 +118,116 @@ def _concern_level(rusle_score: float) -> str:
     return "Critical"
 
 
+def pixel_risk_index(
+    ndvi_array: np.ndarray,
+    slope_array: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute per-pixel RUSLE Risk Index (C x LS) for every pixel in the field.
+    Returns array of same shape as inputs.
+    C-factor derived from NDVI via Iowa lookup table.
+    LS-factor derived from slope percent via simplified lookup.
+    """
+    c_array = np.full(ndvi_array.shape, np.nan, dtype=float)
+    c_array = np.where(ndvi_array < 0.15,                                    0.90, c_array)
+    c_array = np.where((ndvi_array >= 0.15) & (ndvi_array < 0.20),           0.75, c_array)
+    c_array = np.where((ndvi_array >= 0.20) & (ndvi_array < 0.35),           0.45, c_array)
+    c_array = np.where((ndvi_array >= 0.35) & (ndvi_array < 0.50),           0.20, c_array)
+    c_array = np.where((ndvi_array >= 0.50) & (ndvi_array < 0.65),           0.08, c_array)
+    c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
+
+    ls_array = np.full(slope_array.shape, np.nan, dtype=float)
+    ls_array = np.where(slope_array < 2,                                      0.2,  ls_array)
+    ls_array = np.where((slope_array >= 2)  & (slope_array < 4),              0.5,  ls_array)
+    ls_array = np.where((slope_array >= 4)  & (slope_array < 6),              1.0,  ls_array)
+    ls_array = np.where((slope_array >= 6)  & (slope_array < 9),              1.8,  ls_array)
+    ls_array = np.where((slope_array >= 9)  & (slope_array < 12),             2.8,  ls_array)
+    ls_array = np.where((slope_array >= 12) & (slope_array < 20),             4.5,  ls_array)
+    ls_array = np.where(slope_array >= 20,                                    7.0,  ls_array)
+
+    risk_array = c_array * ls_array
+    risk_array = np.where(
+        np.isnan(ndvi_array) | np.isnan(slope_array), np.nan, risk_array
+    )
+    return risk_array
+
+
+def classify_risk_zones(risk_array: np.ndarray) -> np.ndarray:
+    """
+    Classify pixel-level Risk Index into 4 concern zones.
+    Returns float array: 1=Low, 2=Moderate, 3=High, 4=Critical (NaN where no data).
+    Matches Concern Level labels used in field summary.
+    """
+    zones = np.full(risk_array.shape, np.nan, dtype=float)
+    zones = np.where(risk_array < 0.3,                            1, zones)
+    zones = np.where((risk_array >= 0.3) & (risk_array < 0.7),   2, zones)
+    zones = np.where((risk_array >= 0.7) & (risk_array < 1.5),   3, zones)
+    zones = np.where(risk_array >= 1.5,                           4, zones)
+    zones = np.where(np.isnan(risk_array),                        np.nan, zones)
+    return zones
+
+
 def score_erosion_concern(
     ndvi_mean: float,
     slope_mean: float,
     ndvi_threshold: float = DEFAULT_THRESHOLDS["ndvi_low"],
     slope_threshold: float = DEFAULT_THRESHOLDS["slope_steep"],
+    ndvi_array: np.ndarray = None,
+    slope_array: np.ndarray = None,
 ) -> Dict[str, Any]:
     """
     Score field-level erosion concern using RUSLE C x LS proxy.
 
-    Parameters
-    ----------
-    ndvi_mean       : Mean NDVI across the clipped field
-    slope_mean      : Mean slope (%) across the clipped field
-    ndvi_threshold  : Legacy threshold (kept for sidebar slider compatibility)
-    slope_threshold : Legacy threshold (kept for sidebar slider compatibility)
+    When ndvi_array and slope_array are provided, concern_level is derived
+    from the distribution of pixel-level Risk Index scores across the field.
+    Mean-based c_factor, ls_factor, and rusle_score are retained for display.
 
     Returns
     -------
     Dict with keys:
         concern_level   : "Low" | "Moderate" | "High" | "Critical"
         score           : int 1-4 (for color coding)
-        c_factor        : RUSLE C-factor from Iowa lookup table
-        ls_factor       : Simplified LS-factor from slope
-        rusle_score     : C × LS combined score
-        low_cover       : bool (legacy — NDVI below threshold)
-        steep_slope     : bool (legacy — slope above threshold)
-        ndvi_threshold  : float (echoed back for report)
-        slope_threshold : float (echoed back for report)
+        c_factor        : mean-based RUSLE C-factor (Iowa lookup)
+        ls_factor       : mean-based simplified LS-factor
+        rusle_score     : mean C × LS combined score
+        risk_array      : per-pixel Risk Index array (None if no arrays given)
+        zone_array      : per-pixel zone classification 1–4 (None if no arrays given)
+        low_cover       : bool (legacy)
+        steep_slope     : bool (legacy)
+        ndvi_threshold  : float (echoed back)
+        slope_threshold : float (echoed back)
         recommendation  : str — plain-English NRCS advisory text
     """
-    c_factor   = _lookup_c_factor(ndvi_mean)
-    ls_factor  = _lookup_ls_factor(slope_mean)
+    c_factor    = _lookup_c_factor(ndvi_mean)
+    ls_factor   = _lookup_ls_factor(slope_mean)
     rusle_score = c_factor * ls_factor
 
-    concern    = _concern_level(rusle_score)
-    score_int  = {"Low": 1, "Moderate": 2, "High": 3, "Critical": 4}.get(concern, 2)
+    risk_array_out = None
+    zone_array_out = None
 
-    # Plain-English recommendations by concern level
+    if ndvi_array is not None and slope_array is not None:
+        risk_array_out = pixel_risk_index(ndvi_array, slope_array)
+        zone_array_out = classify_risk_zones(risk_array_out)
+        valid_mask  = ~np.isnan(zone_array_out)
+        valid_count = valid_mask.sum()
+        if valid_count > 0:
+            pct_critical = float((zone_array_out[valid_mask] == 4).sum() / valid_count * 100)
+            pct_high     = float((zone_array_out[valid_mask] == 3).sum() / valid_count * 100)
+            if pct_critical > 10:
+                concern = "Critical"
+            elif pct_critical > 0 or pct_high > 25:
+                concern = "High"
+            elif pct_high > 10:
+                concern = "Moderate"
+            else:
+                concern = "Low"
+        else:
+            concern = _concern_level(rusle_score)
+    else:
+        concern = _concern_level(rusle_score)
+
+    score_int = {"Low": 1, "Moderate": 2, "High": 3, "Critical": 4}.get(concern, 2)
+
     recommendations = {
         "Critical": (
             "Satellite imagery indicates low cover crop establishment "
@@ -178,6 +257,8 @@ def score_erosion_concern(
         "c_factor":        round(c_factor, 3),
         "ls_factor":       round(ls_factor, 2),
         "rusle_score":     round(rusle_score, 3),
+        "risk_array":      risk_array_out,
+        "zone_array":      zone_array_out,
         "low_cover":       ndvi_mean < ndvi_threshold,
         "steep_slope":     slope_mean > slope_threshold,
         "ndvi_threshold":  ndvi_threshold,

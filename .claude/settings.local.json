@@ -5,7 +5,9 @@
       "Bash(python -m py_compile src/wss_utils.py)",
       "Bash(python -m py_compile src/scoring.py)",
       "Bash(python -m py_compile app.py)",
-      "Bash(python -m py_compile src/report_generator.py)"
+      "Bash(python -m py_compile src/report_generator.py)",
+      "Bash(python -m py_compile src/raster_utils.py)",
+      "Bash(python -m py_compile src/visualization.py)"
     ]
   }
 }

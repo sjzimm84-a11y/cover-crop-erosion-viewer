@@ -23,6 +23,7 @@ def build_map_with_rasters(
     slope_opacity: float = 0.4,
     zoom_start: int = 15,
     ndvi_threshold: float = 0.20,
+    risk_zone_array: np.ndarray = None,
 ) -> folium.Map:
     # Expose threshold to colormap logic below
     ndvi_opacity_threshold = ndvi_threshold
@@ -133,6 +134,29 @@ def build_map_with_rasters(
         name="Slope (red=steep, blue=flat)", show=True,
     ).add_to(m)
 
+    # --- Risk Index Zones layer (optional) ---
+    if risk_zone_array is not None:
+        ZONE_COLORS = {
+            1: np.array([ 34, 197,  94, 255], dtype=np.uint8),  # #22C55E green  — Low
+            2: np.array([250, 204,  21, 255], dtype=np.uint8),  # #FACC15 yellow — Moderate
+            3: np.array([249, 115,  22, 255], dtype=np.uint8),  # #F97316 orange — High
+            4: np.array([239,  68,  68, 255], dtype=np.uint8),  # #EF4444 red    — Critical
+        }
+        rz_h, rz_w = risk_zone_array.shape
+        zone_img = np.zeros((rz_h, rz_w, 4), dtype=np.uint8)
+        for val, color in ZONE_COLORS.items():
+            mask = risk_zone_array == val
+            zone_img[mask] = color
+            zone_img[mask, 3] = int(ndvi_opacity * 255)
+        zone_pil = Image.fromarray(zone_img, mode="RGBA")
+        zone_buf = BytesIO()
+        zone_pil.save(zone_buf, format="PNG")
+        zone_url = "data:image/png;base64," + base64.b64encode(zone_buf.getvalue()).decode()
+        folium.raster_layers.ImageOverlay(
+            image=zone_url, bounds=[sw, ne], opacity=1.0,
+            name="Risk Index Zones (C\u00d7LS)", show=False,
+        ).add_to(m)
+
     colorbar_html = """
     <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
         background:rgba(14,17,23,0.88);padding:12px 16px;
@@ -146,7 +170,13 @@ def build_map_with_rasters(
         <b style="color:#79c0ff;">Slope</b><br>
         <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
         <span style="color:#ffffbf;">&#9632;</span> Moderate &nbsp;
-        <span style="color:#4575b4;">&#9632;</span> Flat
+        <span style="color:#4575b4;">&#9632;</span> Flat<br>
+        <hr style="border-color:#30363d;margin:6px 0;">
+        <b style="color:#79c0ff;">Risk Index Zones (C&times;LS)</b><br>
+        <span style="color:#22C55E;">&#9632;</span> Low &nbsp;
+        <span style="color:#FACC15;">&#9632;</span> Moderate &nbsp;
+        <span style="color:#F97316;">&#9632;</span> High &nbsp;
+        <span style="color:#EF4444;">&#9632;</span> Critical
     </div>
     """
     m.get_root().html.add_child(folium.Element(colorbar_html))
@@ -160,10 +190,15 @@ def build_zone_risk_chart(zone_summary: Any) -> Any:
         return px.bar(title="No zone risk categories found.")
 
     color_map = {
-        "High concern": "#cf222e",
-        "Low cover":    "#9a6700",
-        "Steep slope":  "#0550ae",
-        "Normal":       "#1a7f37",
+        "Critical risk": "#EF4444",
+        "High risk":     "#F97316",
+        "Moderate risk": "#FACC15",
+        "Low risk":      "#22C55E",
+        # legacy labels (fallback)
+        "High concern":  "#cf222e",
+        "Low cover":     "#9a6700",
+        "Steep slope":   "#0550ae",
+        "Normal":        "#1a7f37",
     }
     fig = px.bar(
         zone_summary,

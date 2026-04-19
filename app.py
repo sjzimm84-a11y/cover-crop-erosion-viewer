@@ -25,6 +25,8 @@ from src.scoring import (
     DEFAULT_THRESHOLDS,
     score_erosion_concern,
     pixel_level_concern,
+    pixel_risk_index,
+    classify_risk_zones,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report
@@ -454,12 +456,15 @@ if "soil_k_factor" not in st.session_state:
     st.session_state.soil_k_factor = None
 
 
+_risk_zone_preview = classify_risk_zones(pixel_risk_index(ndvi_array, slope_percent))
+
 folium_map = build_map_with_rasters(
     field_boundary, ndvi_array, slope_percent,
     ndvi_transform, ndvi_profile.get("crs"),
     ndvi_opacity, slope_opacity,
     zoom_start=st.session_state.map_zoom,
     ndvi_threshold=ndvi_threshold,
+    risk_zone_array=_risk_zone_preview,
 )
 
 progress.progress(100)
@@ -485,6 +490,20 @@ except ImportError:
     # Fallback if streamlit-folium not installed
     st.components.v1.html(folium_map._repr_html_(), height=520)
 
+with st.expander("How are risk zones calculated?"):
+    st.markdown("""
+**Risk Index = C-factor × LS-factor (computed per pixel)**
+
+| Zone | Risk Index | Meaning |
+|------|-----------|---------|
+| 🟢 Low | < 0.3 | Adequate cover for slope conditions |
+| 🟡 Moderate | 0.3–0.7 | Variable cover — monitor steep units |
+| 🟠 High | 0.7–1.5 | Marginal cover on identified slopes |
+| 🔴 Critical | > 1.5 | Low cover on high-risk slope units |
+
+C-factor is derived from satellite NDVI using Iowa cereal rye calibration. LS-factor is derived from Iowa 3m DEM slope. Field-level Concern Level reflects the distribution of pixel-level Risk Index scores across the field.
+""")
+
 # ---------------------------------------------------------------------------
 # Stats and scoring
 # ---------------------------------------------------------------------------
@@ -495,6 +514,8 @@ risk_result = score_erosion_concern(
     slope_mean=slope_stats["mean"],
     ndvi_threshold=ndvi_threshold,
     slope_threshold=slope_threshold,
+    ndvi_array=ndvi_array,
+    slope_array=slope_percent,
 )
 
 # Concern badge
@@ -566,6 +587,7 @@ zone_summary = zone_risk_summary(
     ndvi_array, slope_percent,
     ndvi_threshold=ndvi_threshold,
     slope_threshold=slope_threshold,
+    zone_array=risk_result.get("zone_array"),
 )
 st.subheader("📋 Zone Risk Summary")
 zone_summary_display = zone_summary.copy()

@@ -141,14 +141,43 @@ def zone_risk_summary(
     slope_array: np.ndarray,
     ndvi_threshold: float = 0.35,
     slope_threshold: float = 6.0,
+    zone_array: np.ndarray = None,
 ) -> Any:
-    category = np.full(ndvi_array.shape, "Normal", dtype=object)
-    low_cover  = ndvi_array < ndvi_threshold
-    steep_slope = slope_array > slope_threshold
+    """
+    Summarize zone distribution across the field.
 
-    # Ignore NaN slope pixels
+    When zone_array is provided (pre-computed pixel Risk Index zones 1–4),
+    returns rows labeled Critical/High/Moderate/Low risk.
+    Otherwise falls back to threshold-based classification for backward compat.
+    """
+    import pandas as pd
+
+    if zone_array is not None:
+        ZONE_DEFS = [
+            (4, "Critical risk"),
+            (3, "High risk"),
+            (2, "Moderate risk"),
+            (1, "Low risk"),
+        ]
+        rows = []
+        total_pixels = float(zone_array.size)
+        for val, label in ZONE_DEFS:
+            mask_data = zone_array == val
+            if not np.any(mask_data):
+                continue
+            rows.append({
+                "zone":       label,
+                "percent":    float(np.nansum(mask_data) / total_pixels * 100.0),
+                "ndvi_mean":  float(np.nanmean(ndvi_array[mask_data])),
+                "slope_mean": float(np.nanmean(slope_array[mask_data])),
+            })
+        return pd.DataFrame(rows)
+
+    # Threshold-based fallback (backward compat)
+    category    = np.full(ndvi_array.shape, "Normal", dtype=object)
+    low_cover   = ndvi_array < ndvi_threshold
     valid_slope = ~np.isnan(slope_array)
-    steep_slope = steep_slope & valid_slope
+    steep_slope = (slope_array > slope_threshold) & valid_slope
 
     category[low_cover  &  steep_slope] = "High concern"
     category[low_cover  & ~steep_slope] = "Low cover"
@@ -161,16 +190,10 @@ def zone_risk_summary(
         mask_data = category == label
         if not np.any(mask_data):
             continue
-        ndvi_values  = ndvi_array[mask_data]
-        slope_values = slope_array[mask_data]
-        rows.append(
-            {
-                "zone":      label,
-                "percent":   float(mask_data.sum() / total_pixels * 100.0),
-                "ndvi_mean": float(np.nanmean(ndvi_values)),
-                "slope_mean": float(np.nanmean(slope_values)),
-            }
-        )
-
-    import pandas as pd
+        rows.append({
+            "zone":       label,
+            "percent":    float(mask_data.sum() / total_pixels * 100.0),
+            "ndvi_mean":  float(np.nanmean(ndvi_array[mask_data])),
+            "slope_mean": float(np.nanmean(slope_array[mask_data])),
+        })
     return pd.DataFrame(rows)
