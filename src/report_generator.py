@@ -736,6 +736,9 @@ def generate_field_report(
             ["Est. Soil Loss (A)", "Soil Loss Tolerance (T)", "Ratio to T", "Status"],
             [f"{_sl:.1f} t/ac/yr", f"{_tv} t/ac/yr", f"{_rt:.2f}\u00d7", _status_text],
         ]
+        # T-value thresholds: <=1x within_t, 1-2x near_t,
+        # 2-5x over_t, >5x critical_t
+        # Source: Iowa NRCS FOTG / RUSLE advisory thresholds
         _status_bg = {
             "within_t":   colors.HexColor("#dcfce7"),
             "near_t":     colors.HexColor("#fef9c3"),

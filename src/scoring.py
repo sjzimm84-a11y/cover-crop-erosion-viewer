@@ -99,15 +99,21 @@ RESIDUE_OPTIONS = list(RESIDUE_ADJUSTMENTS.keys())
 
 # ---------------------------------------------------------------------------
 # Iowa R-factor zones — annual erosivity index (MJ·mm/ha·hr·yr)
-# Southeast Iowa receives R=175; remaining Iowa counties use R=150.
-# Source: NRCS RUSLE2 Iowa State File; ISU Extension PM-1209
+# Northwest Iowa counties use R=150; all remaining Iowa counties use R=175.
+# Source: Iowa NRCS FOTG Section I USLE Erosion Prediction,
+#         Figure 2 — Rainfall Factors (Updated September 2002)
+# R=150: northwest Iowa (~34 counties)
+# R=175: all remaining Iowa counties (default)
+# Shelby County = R=175 (confirmed from FOTG map)
 # ---------------------------------------------------------------------------
-IOWA_R_FACTOR_175_COUNTIES = {
-    "appanoose", "cedar", "clinton", "davis", "des moines", "delaware",
-    "dubuque", "henry", "iowa", "jackson", "jefferson", "johnson",
-    "jones", "keokuk", "lee", "linn", "louisa", "mahaska",
-    "monroe", "muscatine", "scott", "van buren", "wapello",
-    "washington", "wayne",
+IOWA_R_FACTOR_150_COUNTIES = {
+    "lyon", "osceola", "dickinson", "emmet", "kossuth",
+    "winnebago", "worth", "mitchell", "howard", "winneshiek",
+    "sioux", "obrien", "clay", "palo alto", "hancock",
+    "cerro gordo", "floyd", "chickasaw", "plymouth", "cherokee",
+    "buena vista", "pocahontas", "humboldt", "wright", "franklin",
+    "butler", "woodbury", "ida", "sac", "calhoun", "webster",
+    "hamilton", "monona", "crawford",
 }
 
 # ---------------------------------------------------------------------------
@@ -144,32 +150,45 @@ def get_iowa_r_factor(boundary_gdf) -> tuple:
     """
     Look up Iowa R-factor zone from field centroid using FCC Census Block API.
     Returns (r_factor: float, source_note: str).
-    Southeast Iowa counties use R=175; all others R=150.
-    Falls back to R=150 if the API call fails.
+    Northwest Iowa counties use R=150; all other Iowa counties default to
+    R=175 per Iowa NRCS FOTG Section I USLE Figure 2 (September 2002).
+    Falls back to R=175 if the API call fails.
     """
     import urllib.request
     import json as _json
 
     try:
-        centroid = boundary_gdf.to_crs("EPSG:4326").geometry.centroid.iloc[0]
+        centroid = (boundary_gdf.to_crs("EPSG:4326")
+                    .geometry.centroid.iloc[0])
         lat, lon = centroid.y, centroid.x
         url = (
             f"https://geo.fcc.gov/api/census/block/find"
-            f"?latitude={lat:.6f}&longitude={lon:.6f}&format=json"
+            f"?latitude={lat:.6f}&longitude={lon:.6f}"
+            f"&format=json"
         )
         with urllib.request.urlopen(url, timeout=8) as resp:
             data = _json.loads(resp.read())
         county_raw  = data.get("County", {}).get("name", "")
-        county_name = county_raw.lower().replace(" county", "").strip()
-        if county_name in IOWA_R_FACTOR_175_COUNTIES:
-            return (175.0, f"R=175 (southeast Iowa — {county_name.title()} County)")
+        county_name = (county_raw.lower()
+                       .replace(" county", "").strip())
+        if county_name in IOWA_R_FACTOR_150_COUNTIES:
+            return (
+                150.0,
+                f"R=150 (northwest Iowa — "
+                f"{county_name.title()} County, NRCS FOTG)"
+            )
         note = (
-            f"R=150 (standard Iowa — {county_name.title()} County)"
-            if county_name else "R=150 (standard Iowa zone)"
+            f"R=175 (standard Iowa — "
+            f"{county_name.title()} County, NRCS FOTG)"
+            if county_name
+            else "R=175 (standard Iowa zone, NRCS FOTG)"
         )
-        return (150.0, note)
+        return (175.0, note)
     except Exception:
-        return (150.0, "R=150 (default — county lookup unavailable)")
+        return (
+            175.0,
+            "R=175 (default — county lookup unavailable, NRCS FOTG)"
+        )
 
 
 def estimate_soil_loss(
@@ -204,16 +223,20 @@ def estimate_soil_loss(
         status = "T-value unavailable"
     elif ratio <= 1.0:
         status_code = "within_t"
-        status = f"Within T — {soil_loss:.1f} t/ac/yr ≤ T={t_value}"
-    elif ratio <= 1.25:
-        status_code = "near_t"
-        status = f"Near T — {soil_loss:.1f} t/ac/yr (T={t_value})"
+        status = (f"Within tolerable soil loss limit — "
+                  f"{soil_loss:.1f} t/ac/yr \u2264 T={t_value}")
     elif ratio <= 2.0:
+        status_code = "near_t"
+        status = (f"Near tolerable limit — "
+                  f"{soil_loss:.1f} t/ac/yr ({ratio:.1f}\u00d7 T={t_value})")
+    elif ratio <= 5.0:
         status_code = "over_t"
-        status = f"Exceeds T — {soil_loss:.1f} t/ac/yr ({ratio:.1f}× T={t_value})"
+        status = (f"Exceeds tolerable limit — "
+                  f"{soil_loss:.1f} t/ac/yr ({ratio:.1f}\u00d7 T={t_value})")
     else:
         status_code = "critical_t"
-        status = f"Critical — {soil_loss:.1f} t/ac/yr ({ratio:.1f}× T={t_value})"
+        status = (f"Significantly exceeds tolerable limit — "
+                  f"{soil_loss:.1f} t/ac/yr ({ratio:.1f}\u00d7 T={t_value})")
 
     return {
         "soil_loss_tons_ac_yr": round(soil_loss, 2),

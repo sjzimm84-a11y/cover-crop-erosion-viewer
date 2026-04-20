@@ -708,7 +708,8 @@ _biomass_kgha  = max(0.0, (_ndvi_mean - 0.10) / 0.40 * 3500)
 _biomass_lbac  = _biomass_kgha * 0.891
 _biomass_low   = max(0, round(_biomass_lbac * 0.6 / 50) * 50)
 _biomass_high  = round(_biomass_lbac * 1.4 / 50) * 50
-_valid_px      = ndvi_array[~np.isnan(ndvi_array)]
+_valid_px      = ndvi_array[
+        (ndvi_array > 0.05) & ~np.isnan(ndvi_array)]
 _pct_above_020 = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
 _valid_pct     = (_valid_px.size / ndvi_array.size * 100) if ndvi_array.size > 0 else 0.0
 
