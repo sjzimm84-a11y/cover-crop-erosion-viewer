@@ -892,6 +892,8 @@ with col_dl1:
                     slope_stats=slope_stats,
                     risk_result=risk_result,
                     zone_summary=zone_summary,
+                    risk_zone_array=_risk_zone_preview,
+                    zone_counts=risk_result.get("zone_counts", {}),
                     ndvi_threshold=ndvi_threshold,
                     slope_threshold=slope_threshold,
                     ndvi_date_from=st.session_state.ndvi_date_from,

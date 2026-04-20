@@ -9,7 +9,12 @@
       "Bash(python -m py_compile src/raster_utils.py)",
       "Bash(python -m py_compile src/visualization.py)",
       "Bash(python -c \"from src.scoring import get_iowa_r_factor, estimate_soil_loss, IOWA_R_FACTOR_175_COUNTIES, IOWA_T_VALUES; print\\('imports OK'\\); print\\('R-factor counties:', len\\(IOWA_R_FACTOR_175_COUNTIES\\)\\); print\\('T-values:', IOWA_T_VALUES\\)\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\('src/report_generator.py'\\).read\\(\\)\\); print\\('report_generator.py OK'\\)\")",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "Bash(python -c \"import ast, io; ast.parse\\(open\\('src/report_generator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('report_generator.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/report_generator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('report_generator.py OK'\\)\")"
     ]
   }
 }

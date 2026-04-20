@@ -31,7 +31,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image as RLImage, HRFlowable,
+    Image as RLImage, HRFlowable, PageBreak,
 )
 from reportlab.pdfgen import canvas as rl_canvas
 
@@ -168,6 +168,47 @@ def generate_slope_map_image(
     return buf.getvalue()
 
 
+def generate_risk_zone_map_image(
+    risk_zone_array: np.ndarray,
+    width_px: int = 600,
+    height_px: int = 400,
+) -> bytes:
+    """Generate Risk Index zone map PNG (zones 1–4) for embedding in PDF."""
+    _ZONE_RGB = {
+        1: [ 34, 197,  94],   # green  — Low
+        2: [250, 204,  21],   # yellow — Moderate
+        3: [249, 115,  22],   # orange — High
+        4: [239,  68,  68],   # red    — Critical
+    }
+    h, w = risk_zone_array.shape
+    rgb = np.full((h, w, 3), 240, dtype=np.uint8)   # light gray = nodata
+    for val, color in _ZONE_RGB.items():
+        m = risk_zone_array == val
+        rgb[m] = color
+
+    fig, ax = plt.subplots(1, 1, figsize=(width_px / 100, height_px / 100), dpi=100)
+    ax.imshow(rgb, aspect="auto")
+    ax.axis("off")
+    ax.set_title("Erosion Risk Index Zones (C\u00d7LS)", fontsize=9, pad=4)
+
+    patches = [
+        mpatches.Patch(color=[c / 255 for c in [239,  68,  68]], label="Critical (\u22651.5)"),
+        mpatches.Patch(color=[c / 255 for c in [249, 115,  22]], label="High (0.7\u20131.5)"),
+        mpatches.Patch(color=[c / 255 for c in [250, 204,  21]], label="Moderate (0.3\u20130.7)"),
+        mpatches.Patch(color=[c / 255 for c in [ 34, 197,  94]], label="Low (<0.3)"),
+    ]
+    ax.legend(handles=patches, loc="lower left", fontsize=8,
+              framealpha=0.85, edgecolor="#cccccc")
+
+    fig.tight_layout(pad=0.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Zone acreage calculator
 # ---------------------------------------------------------------------------
@@ -213,9 +254,11 @@ def generate_field_report(
     slope_stats: Dict[str, float],
     risk_result: Dict[str, Any],
     zone_summary: Any,
+    risk_zone_array: Optional[np.ndarray] = None,
+    zone_counts: Optional[Dict[str, int]] = None,
     # Settings
-    ndvi_threshold: float,
-    slope_threshold: float,
+    ndvi_threshold: float = 0.20,
+    slope_threshold: float = 6.0,
     # Dates
     ndvi_date_from: Optional[str] = None,
     ndvi_date_to: Optional[str] = None,
@@ -364,152 +407,182 @@ def generate_field_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
-    # MAPS — side by side
+    # PAGE 1 — MAPS
     # -----------------------------------------------------------------------
-    story.append(Paragraph("Management Zone Map", section_style))
-
-    ndvi_png  = generate_zone_map_image(ndvi_array, ndvi_threshold)
-    slope_png = generate_slope_map_image(slope_array)
-
-    map_w = 3.4 * inch
-    map_h = 2.3 * inch
-
-    ndvi_img  = RLImage(io.BytesIO(ndvi_png),  width=map_w, height=map_h)
-    slope_img = RLImage(io.BytesIO(slope_png), width=map_w, height=map_h)
+    story.append(Paragraph("Field Risk Maps", section_style))
 
     map_label_style = ParagraphStyle(
         "MapLabel", parent=body_style,
         alignment=TA_CENTER, fontSize=8, fontName="Helvetica-Bold"
     )
+    _marginal_upper = ndvi_threshold + 0.15
 
-    maps_data = [[
-        [ndvi_img,  Paragraph("NDVI Cover Quality Zones",  map_label_style)],
-        [slope_img, Paragraph("Terrain Slope (% gradient)", map_label_style)],
-    ]]
+    # Risk Index map — full width
+    if risk_zone_array is not None:
+        risk_png = generate_risk_zone_map_image(risk_zone_array)
+        risk_img = RLImage(io.BytesIO(risk_png), width=7.0 * inch, height=3.4 * inch)
+        story.append(risk_img)
+        story.append(Paragraph(
+            "Erosion Risk Index Zones (C\u00d7LS) \u2014 pixel-level RUSLE risk classification",
+            map_label_style,
+        ))
+        story.append(Spacer(1, 8))
+
+    # NDVI + Slope — side by side
+    ndvi_png  = generate_zone_map_image(ndvi_array, ndvi_threshold)
+    slope_png = generate_slope_map_image(slope_array)
+    map_w = 3.4 * inch
+    map_h = 2.2 * inch
+    ndvi_img  = RLImage(io.BytesIO(ndvi_png),  width=map_w, height=map_h)
+    slope_img = RLImage(io.BytesIO(slope_png), width=map_w, height=map_h)
+
     maps_table = Table(
         [[ndvi_img, slope_img]],
-        colWidths=[map_w + 0.1*inch, map_w + 0.1*inch],
+        colWidths=[map_w + 0.1 * inch, map_w + 0.1 * inch],
     )
     maps_table.setStyle(TableStyle([
-        ("ALIGN", (0,0), (-1,-1), "CENTER"),
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ("LEFTPADDING", (0,0), (-1,-1), 4),
-        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("ALIGN",        (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
     story.append(maps_table)
 
-    # Map labels
     labels_data = [[
-        Paragraph("NDVI Cover Quality Zones", map_label_style),
-        Paragraph("Terrain Slope (% gradient)", map_label_style),
+        Paragraph(
+            f"NDVI Cover Quality \u2014 Low (<{ndvi_threshold:.2f}) / Marginal / Good (>{_marginal_upper:.2f})",
+            map_label_style,
+        ),
+        Paragraph("Terrain Slope (% gradient) \u2014 Flat / Moderate / Steep", map_label_style),
     ]]
     labels_table = Table(
         labels_data,
-        colWidths=[map_w + 0.1*inch, map_w + 0.1*inch],
+        colWidths=[map_w + 0.1 * inch, map_w + 0.1 * inch],
     )
-    labels_table.setStyle(TableStyle([
-        ("ALIGN", (0,0), (-1,-1), "CENTER"),
-    ]))
+    labels_table.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
     story.append(labels_table)
-    story.append(Spacer(1, 6))
+
+    story.append(PageBreak())
 
     # -----------------------------------------------------------------------
-    # METRICS + ZONE TABLE — side by side
+    # PAGE 2
     # -----------------------------------------------------------------------
+
+    # --- CoverMap Advisory ---
     story.append(HRFlowable(width="100%", thickness=0.5,
                             color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("CoverMap Advisory & Recommendation", section_style))
 
-    concern      = risk_result.get("concern_level", "N/A")
-    concern_col  = CONCERN_BADGE_COLOR.get(concern, TEXT_DARK)
-    zone_acres   = calculate_zone_acres(ndvi_array, ndvi_threshold)
+    concern     = risk_result.get("concern_level", "N/A")
+    concern_col = CONCERN_BADGE_COLOR.get(concern, TEXT_DARK)
 
-    # Build C-factor display — show both values when residue adjustment applied
-    _c_adj   = risk_result.get("c_factor", 0)
-    _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
-    _c_mult  = risk_result.get("residue_multiplier", 1.0)
-    if _c_mult < 1.0:
-        _c_display = f"{_c_raw:.3f} → {_c_adj:.3f} (×{_c_mult:.2f} residue)"
-        _c_label   = "C-Factor (adj.)"
-    else:
-        _c_display = f"{_c_adj:.3f} (no residue adj.)"
-        _c_label   = "C-Factor (RUSLE)"
-
-    # Metrics table
-    metrics = [
-        ["Metric", "Value"],
-        ["NDVI Mean",          f"{ndvi_stats.get('mean', 0):.3f}"],
-        ["NDVI Range",         f"{ndvi_stats.get('min',0):.3f} – {ndvi_stats.get('max',0):.3f}"],
-        ["Slope Mean (%)",     f"{slope_stats.get('mean',0):.1f}%"],
-        [_c_label,             _c_display],
-        ["Risk Index (C×LS)",  f"{risk_result.get('rusle_score', 0):.3f}"],
-        ["Erosion Concern",    concern],
-    ]
-
-    met_style = TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0),  BLUE_ACCENT),
-        ("TEXTCOLOR",     (0,0), (-1,0),  colors.white),
-        ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0), (-1,-1), 8.5),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1), [LIGHT_GRAY, colors.white]),
-        ("ALIGN",         (1,0), (1,-1),  "CENTER"),
-        ("GRID",          (0,0), (-1,-1), 0.3, MID_GRAY),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-        ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ("LEFTPADDING",   (0,0), (-1,-1), 6),
-        # Color the concern row
-        ("TEXTCOLOR",     (1,6), (1,6),   concern_col),
-        ("FONTNAME",      (1,6), (1,6),   "Helvetica-Bold"),
-    ])
-
-    met_table = Table(metrics, colWidths=[1.5*inch, 1.1*inch])
-    met_table.setStyle(met_style)
-
-    # Zone acres table
-    zone_rows = [["Zone", "Acres", "% Field"]]
-    total_acres = zone_acres.get("Total", 1)
-    zone_color_map = {
-        "Low cover":  colors.HexColor("#FEE8D5"),
-        "Marginal":   colors.HexColor("#E0F2FE"),
-        "Good cover": colors.HexColor("#FEF9C3"),
-    }
-    for zone in ["Low cover", "Marginal", "Good cover"]:
-        acres = zone_acres.get(zone, 0)
-        pct   = acres / total_acres * 100 if total_acres > 0 else 0
-        zone_rows.append([zone, f"{acres:.1f}", f"{pct:.0f}%"])
-    zone_rows.append(["Total", f"{total_acres:.1f}", "100%"])
-
-    zone_t_style = TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0),  BLUE_ACCENT),
-        ("TEXTCOLOR",     (0,0), (-1,0),  colors.white),
-        ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0), (-1,-1), 8.5),
-        ("BACKGROUND",    (0,1), (-1,1),  zone_color_map["Low cover"]),
-        ("BACKGROUND",    (0,2), (-1,2),  zone_color_map["Marginal"]),
-        ("BACKGROUND",    (0,3), (-1,3),  zone_color_map["Good cover"]),
-        ("BACKGROUND",    (0,4), (-1,4),  LIGHT_GRAY),
-        ("FONTNAME",      (0,4), (-1,4),  "Helvetica-Bold"),
-        ("ALIGN",         (1,0), (2,-1),  "CENTER"),
-        ("GRID",          (0,0), (-1,-1), 0.3, MID_GRAY),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-        ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ("LEFTPADDING",   (0,0), (-1,-1), 6),
-    ])
-    zone_table = Table(zone_rows, colWidths=[1.1*inch, 0.7*inch, 0.7*inch])
-    zone_table.setStyle(zone_t_style)
-
-    # Side by side
-    combined = Table(
-        [[met_table, Spacer(0.2*inch, 1), zone_table]],
-        colWidths=[2.7*inch, 0.2*inch, 2.6*inch],
+    concern_badge_style = ParagraphStyle(
+        "ConcernBadge", parent=body_style,
+        fontSize=10, fontName="Helvetica-Bold", textColor=concern_col,
     )
-    combined.setStyle(TableStyle([
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
-    ]))
-    story.append(combined)
-    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"Erosion Concern: {concern}", concern_badge_style))
 
-    # Image date disclaimer (amber info box)
-    _img_date_label = ndvi_date_to or ndvi_scene_date or "unknown"
+    rec_text = risk_result.get("recommendation", "No recommendation available.")
+    rec_bg   = {
+        "Low":      colors.HexColor("#dcfce7"),
+        "Moderate": colors.HexColor("#fef9c3"),
+        "High":     colors.HexColor("#fee2e2"),
+        "Critical": colors.HexColor("#fecaca"),
+    }.get(concern, LIGHT_GRAY)
+
+    rec_data = [[Paragraph(rec_text, body_style)]]
+    rec_table = Table(rec_data, colWidths=[7 * inch])
+    rec_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), rec_bg),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("BOX",           (0, 0), (-1, -1), 0.5, MID_GRAY),
+    ]))
+    story.append(rec_table)
+    story.append(Spacer(1, 8))
+
+    # --- NDVI Zone Summary ---
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("Cover Crop Stand \u2014 NDVI Zone Summary", section_style))
+
+    zone_acres  = calculate_zone_acres(ndvi_array, ndvi_threshold)
+    total_acres = zone_acres.get("Total", 1)
+    zone_display_rows = [
+        ("Low cover",  f"Low cover (NDVI < {ndvi_threshold:.2f})",             colors.HexColor("#FEE8D5")),
+        ("Marginal",   f"Marginal ({ndvi_threshold:.2f}\u2013{_marginal_upper:.2f})", colors.HexColor("#E0F2FE")),
+        ("Good cover", f"Good cover (NDVI > {_marginal_upper:.2f})",            colors.HexColor("#FEF9C3")),
+    ]
+    ndvi_zone_rows = [["Zone", "Acres", "% Field"]]
+    ndvi_zone_bg  = []
+    for i, (key, label, bg) in enumerate(zone_display_rows, start=1):
+        acres = zone_acres.get(key, 0)
+        pct   = acres / total_acres * 100 if total_acres > 0 else 0
+        ndvi_zone_rows.append([label, f"{acres:.1f}", f"{pct:.0f}%"])
+        ndvi_zone_bg.append(("BACKGROUND", (0, i), (-1, i), bg))
+    ndvi_zone_rows.append(["Total", f"{total_acres:.1f}", "100%"])
+
+    ndvi_zone_table = Table(ndvi_zone_rows, colWidths=[3.5 * inch, 1.0 * inch, 1.0 * inch])
+    ndvi_zone_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("BACKGROUND",    (0, 4), (-1, 4),  LIGHT_GRAY),
+        ("FONTNAME",      (0, 4), (-1, 4),  "Helvetica-Bold"),
+        ("ALIGN",         (1, 0), (2, -1),  "CENTER"),
+        ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+    ] + ndvi_zone_bg))
+    story.append(ndvi_zone_table)
+    story.append(Spacer(1, 8))
+
+    # --- Risk Index Zone Summary ---
+    if zone_counts:
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=MID_GRAY, spaceAfter=4))
+        story.append(Paragraph("Erosion Risk Zone Summary (C\u00d7LS)", section_style))
+
+        RISK_ZONE_DEFS = [
+            (4, "Critical risk (\u22651.5)",   colors.HexColor("#fecaca")),
+            (3, "High risk (0.7\u20131.5)",    colors.HexColor("#fee2e2")),
+            (2, "Moderate risk (0.3\u20130.7)", colors.HexColor("#fef9c3")),
+            (1, "Low risk (<0.3)",             colors.HexColor("#dcfce7")),
+        ]
+        total_zone_px   = sum(zone_counts.values()) or 1
+        risk_zone_rows  = [["Zone", "Pixels", "% Field"]]
+        risk_zone_bg    = []
+        actual_row      = 1
+        for val, label, bg in RISK_ZONE_DEFS:
+            px = zone_counts.get(val, 0)
+            if px == 0:
+                continue
+            pct = px / total_zone_px * 100
+            risk_zone_rows.append([label, str(px), f"{pct:.0f}%"])
+            risk_zone_bg.append(("BACKGROUND", (0, actual_row), (-1, actual_row), bg))
+            actual_row += 1
+
+        risk_zone_t = Table(risk_zone_rows, colWidths=[3.5 * inch, 1.0 * inch, 1.0 * inch])
+        risk_zone_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("ALIGN",         (1, 0), (2, -1),  "CENTER"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ] + risk_zone_bg))
+        story.append(risk_zone_t)
+        story.append(Spacer(1, 8))
+
+    # --- Amber disclaimer ---
+    _img_date_label = ndvi_scene_date or ndvi_date_to or "unknown"
     disclaimer_text = (
         f"NDVI imagery dated {_img_date_label}. Field conditions may have changed since "
         f"image capture. This report documents satellite-observed conditions only."
@@ -519,7 +592,7 @@ def generate_field_report(
         fontSize=8, textColor=colors.HexColor("#92400e"),
     )
     disc_data = [[Paragraph(disclaimer_text, disclaimer_style)]]
-    disc_table = Table(disc_data, colWidths=[7*inch])
+    disc_table = Table(disc_data, colWidths=[7 * inch])
     disc_table.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#fef3c7")),
         ("LEFTPADDING",   (0, 0), (-1, -1), 8),
@@ -532,39 +605,11 @@ def generate_field_report(
     story.append(Spacer(1, 8))
 
     # -----------------------------------------------------------------------
-    # NRCS RECOMMENDATION
-    # -----------------------------------------------------------------------
-    story.append(HRFlowable(width="100%", thickness=0.5,
-                            color=MID_GRAY, spaceAfter=4))
-    story.append(Paragraph("NRCS Advisory & Recommendation", section_style))
-
-    rec_text = risk_result.get("recommendation", "No recommendation available.")
-    rec_bg   = {
-        "Low":      colors.HexColor("#dcfce7"),
-        "Moderate": colors.HexColor("#fef9c3"),
-        "High":     colors.HexColor("#fee2e2"),
-        "Critical": colors.HexColor("#fecaca"),
-    }.get(concern, LIGHT_GRAY)
-
-    rec_data = [[Paragraph(rec_text, body_style)]]
-    rec_table = Table(rec_data, colWidths=[7*inch])
-    rec_table.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), rec_bg),
-        ("LEFTPADDING",   (0,0), (-1,-1), 8),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 8),
-        ("TOPPADDING",    (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("BOX",           (0,0), (-1,-1), 0.5, MID_GRAY),
-    ]))
-    story.append(rec_table)
-    story.append(Spacer(1, 6))
-
-    # -----------------------------------------------------------------------
     # EQIP PRE-VERIFICATION CHECKLIST
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
                             color=MID_GRAY, spaceAfter=4))
-    story.append(Paragraph("Cover Crop Stand Assessment — Satellite Documentation", section_style))
+    story.append(Paragraph("Cover Crop Stand Assessment \u2014 Satellite Documentation", section_style))
 
     ndvi_mean_val  = ndvi_stats.get("mean", 0.0)
     biomass_kgha   = max(0.0, (ndvi_mean_val - 0.10) / 0.40 * 3500)
@@ -600,32 +645,77 @@ def generate_field_report(
         ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission"],
     ]
 
-    eqip_col_w = [1.8*inch, 1.9*inch, 3.3*inch]
+    eqip_col_w = [1.8 * inch, 1.9 * inch, 3.3 * inch]
     eqip_table = Table(
         [[Paragraph(str(cell), body_style) for cell in row] for row in eqip_data],
         colWidths=eqip_col_w,
     )
     eqip_style = TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
-        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0, 0), (-1, -1), 8.0),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
-        ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND",     (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 8.0),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+        ("GRID",           (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+        ("TOPPADDING",     (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
     ])
     eqip_table.setStyle(eqip_style)
     story.append(eqip_table)
-
     story.append(Paragraph(
         "<i>Remote sensing confirms spatial cover crop presence. "
         "Seeding rate, species, and termination compliance require CCA field "
         "verification per NRCS Practice Code 340.</i>",
         small_style,
     ))
+    story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
+    # COVER CROP METRICS
+    # -----------------------------------------------------------------------
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=4))
+    story.append(Paragraph("Cover Crop Metrics", section_style))
+
+    _c_adj   = risk_result.get("c_factor", 0)
+    _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
+    _c_mult  = risk_result.get("residue_multiplier", 1.0)
+    if _c_mult < 1.0:
+        _c_display = f"{_c_raw:.3f} \u2192 {_c_adj:.3f} (\u00d7{_c_mult:.2f} residue)"
+        _c_label   = "C-Factor (adj.)"
+    else:
+        _c_display = f"{_c_adj:.3f} (no residue adj.)"
+        _c_label   = "C-Factor (RUSLE)"
+
+    metrics = [
+        ["Metric", "Value"],
+        ["NDVI Mean",         f"{ndvi_stats.get('mean', 0):.3f}"],
+        ["NDVI Range",        f"{ndvi_stats.get('min', 0):.3f} \u2013 {ndvi_stats.get('max', 0):.3f}"],
+        ["Slope Mean (%)",    f"{slope_stats.get('mean', 0):.1f}%"],
+        [_c_label,            _c_display],
+        ["Risk Index (C\u00d7LS)", f"{risk_result.get('rusle_score', 0):.3f}"],
+        ["Erosion Concern",   concern],
+    ]
+
+    met_style = TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+        ("ALIGN",         (1, 0), (1, -1),  "CENTER"),
+        ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("TEXTCOLOR",     (1, 6), (1, 6),   concern_col),
+        ("FONTNAME",      (1, 6), (1, 6),   "Helvetica-Bold"),
+    ])
+    met_table = Table(metrics, colWidths=[1.8 * inch, 1.8 * inch])
+    met_table.setStyle(met_style)
+    story.append(met_table)
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
@@ -636,20 +726,15 @@ def generate_field_report(
     story.append(Paragraph("Estimated Soil Loss vs. Soil Loss Tolerance", section_style))
 
     if soil_loss_result and soil_loss_result.get("status_code") != "unavailable":
-        _sl  = soil_loss_result.get("soil_loss_tons_ac_yr", 0)
-        _tv  = soil_loss_result.get("t_value", 5)
-        _rt  = soil_loss_result.get("ratio_to_t", 0)
-        _sc  = soil_loss_result.get("status_code", "over_t")
+        _sl          = soil_loss_result.get("soil_loss_tons_ac_yr", 0)
+        _tv          = soil_loss_result.get("t_value", 5)
+        _rt          = soil_loss_result.get("ratio_to_t", 0)
+        _sc          = soil_loss_result.get("status_code", "over_t")
         _status_text = soil_loss_result.get("conservation_status", "")
 
         sl_metrics = [
             ["Est. Soil Loss (A)", "Soil Loss Tolerance (T)", "Ratio to T", "Status"],
-            [
-                f"{_sl:.1f} t/ac/yr",
-                f"{_tv} t/ac/yr",
-                f"{_rt:.2f}×",
-                _status_text,
-            ],
+            [f"{_sl:.1f} t/ac/yr", f"{_tv} t/ac/yr", f"{_rt:.2f}\u00d7", _status_text],
         ]
         _status_bg = {
             "within_t":   colors.HexColor("#dcfce7"),
@@ -666,7 +751,7 @@ def generate_field_report(
 
         sl_table = Table(
             [[Paragraph(str(cell), body_style) for cell in row] for row in sl_metrics],
-            colWidths=[1.5*inch, 1.5*inch, 1.0*inch, 3.0*inch],
+            colWidths=[1.5 * inch, 1.5 * inch, 1.0 * inch, 3.0 * inch],
         )
         sl_table.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
@@ -686,14 +771,14 @@ def generate_field_report(
         _r_note = r_factor_note or f"R={r_factor:.0f} (Iowa erosivity index)"
         story.append(Paragraph(
             f"<i>Iowa R-factor: {_r_note} | "
-            f"A = R × K × LS × C (P=1.0). Simplified RUSLE estimate for advisory "
-            f"use only — not a substitute for a site-specific RUSLE2 run or official "
+            f"A = R \u00d7 K \u00d7 LS \u00d7 C (P=1.0). Simplified RUSLE estimate for advisory "
+            f"use only \u2014 not a substitute for a site-specific RUSLE2 run or official "
             f"NRCS determination.</i>",
             small_style,
         ))
     else:
         story.append(Paragraph(
-            "Soil loss estimate unavailable — K-factor not returned from USDA "
+            "Soil loss estimate unavailable \u2014 K-factor not returned from USDA "
             "Web Soil Survey for this field location.",
             body_style,
         ))
@@ -725,14 +810,13 @@ def generate_field_report(
         ),
         Spacer(1, 8),
         Paragraph(
-            f"CCA Signature: ___________________________  Initials: _______  Date: _______________",
+            "CCA Signature: ___________________________  Initials: _______  Date: _______________",
             body_style,
         ),
         Spacer(1, 4),
         Paragraph(f"Printed Name: {cca_name}", body_style),
     ]
-    notes_data = [[content] for content in notes_content]
-    notes_block = Table([[col] for col in notes_content], colWidths=[7*inch])
+    notes_block = Table([[col] for col in notes_content], colWidths=[7 * inch])
     notes_block.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
         ("LEFTPADDING",   (0, 0), (-1, -1), 10),
@@ -753,7 +837,7 @@ def generate_field_report(
     footer_lines = [
         f"NDVI Source: Sentinel-2 via Google Earth Engine ({ndvi_date_str}) | "
         f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
-        "C-Factor methodology: Iowa RUSLE lookup table — "
+        "C-Factor methodology: Iowa RUSLE lookup table \u2014 "
         "Laflen & Roose (1998), ISU Extension PM-1209. "
         "This report is advisory only and does not constitute an official NRCS determination.",
         "C-Factor residue adjustment: CoverMap applies a research-based multiplier to the NDVI-derived "
@@ -762,7 +846,7 @@ def generate_field_report(
         "and NRCS RUSLE2 Iowa State File guidance. This adjustment is an agronomic estimate requiring "
         "validation against site-specific RUSLE2 runs. Default multiplier = 1.00 (no adjustment) "
         "when tillage system is unknown.",
-        f"CoverMap · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
+        f"CoverMap \u00b7 {cca_name} \u00b7 Sentinel-2 via Google Earth Engine \u00b7 Iowa RUSLE C-factor calibration \u00b7 {report_date}",
     ]
     for line in footer_lines:
         story.append(Paragraph(line, small_style))
