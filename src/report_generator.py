@@ -75,6 +75,7 @@ def generate_zone_map_image(
     ndvi_threshold: float = 0.20,
     width_px: int = 600,
     height_px: int = 400,
+    array_shape: tuple = None,
 ) -> bytes:
     """
     Generate a 3-zone NDVI map PNG for embedding in PDF.
@@ -95,7 +96,15 @@ def generate_zone_map_image(
     rgb[good_mask]     = [250, 204,  21]   # yellow
     rgb[nodata_mask]   = [240, 240, 240]   # light gray for nodata
 
-    fig, ax = plt.subplots(1, 1, figsize=(width_px/100, height_px/100), dpi=100)
+    if array_shape is not None:
+        _r, _c = array_shape[0], array_shape[1]
+        _asp = _c / max(_r, 1)
+        _fw = width_px / 100
+        _fh = max(_fw / _asp, 1.0)
+        _figsize = (_fw, _fh)
+    else:
+        _figsize = (width_px / 100, height_px / 100)
+    fig, ax = plt.subplots(1, 1, figsize=_figsize, dpi=100)
     ax.imshow(rgb, aspect="auto")
     ax.axis("off")
 
@@ -127,6 +136,7 @@ def generate_slope_map_image(
     slope_array: np.ndarray,
     width_px: int = 600,
     height_px: int = 400,
+    array_shape: tuple = None,
 ) -> bytes:
     """Generate slope map PNG using absolute NRCS thresholds."""
     slope_clean = slope_array.copy().astype(float)
@@ -140,7 +150,15 @@ def generate_slope_map_image(
     )
     slope_norm_safe = np.where(np.isnan(slope_norm), 0.0, slope_norm)
 
-    fig, ax = plt.subplots(1, 1, figsize=(width_px/100, height_px/100), dpi=100)
+    if array_shape is not None:
+        _r, _c = array_shape[0], array_shape[1]
+        _asp = _c / max(_r, 1)
+        _fw = width_px / 100
+        _fh = max(_fw / _asp, 1.0)
+        _figsize = (_fw, _fh)
+    else:
+        _figsize = (width_px / 100, height_px / 100)
+    fig, ax = plt.subplots(1, 1, figsize=_figsize, dpi=100)
     img = ax.imshow(
         slope_norm_safe,
         cmap="RdYlBu_r",
@@ -172,6 +190,7 @@ def generate_risk_zone_map_image(
     risk_zone_array: np.ndarray,
     width_px: int = 600,
     height_px: int = 400,
+    array_shape: tuple = None,
 ) -> bytes:
     """Generate Risk Index zone map PNG (zones 1–4) for embedding in PDF."""
     _ZONE_RGB = {
@@ -186,7 +205,15 @@ def generate_risk_zone_map_image(
         m = risk_zone_array == val
         rgb[m] = color
 
-    fig, ax = plt.subplots(1, 1, figsize=(width_px / 100, height_px / 100), dpi=100)
+    if array_shape is not None:
+        _r, _c = array_shape[0], array_shape[1]
+        _asp = _c / max(_r, 1)
+        _fw = width_px / 100
+        _fh = max(_fw / _asp, 1.0)
+        _figsize = (_fw, _fh)
+    else:
+        _figsize = (width_px / 100, height_px / 100)
+    fig, ax = plt.subplots(1, 1, figsize=_figsize, dpi=100)
     ax.imshow(rgb, aspect="auto")
     ax.axis("off")
     ax.set_title("Erosion Risk Index Zones (C\u00d7LS)", fontsize=9, pad=4)
@@ -417,10 +444,17 @@ def generate_field_report(
     )
     _marginal_upper = ndvi_threshold + 0.15
 
-    # Risk Index map — full width
+    # Dynamic aspect ratio from array shape
+    _rows, _cols = ndvi_array.shape
+    _aspect = _cols / max(_rows, 1)
+
+    # Risk Index map — full width, aspect-corrected
+    _risk_pdf_w = 7.0 * inch
+    _risk_pdf_h = min(_risk_pdf_w / _aspect, 3.8 * inch)
     if risk_zone_array is not None:
-        risk_png = generate_risk_zone_map_image(risk_zone_array)
-        risk_img = RLImage(io.BytesIO(risk_png), width=7.0 * inch, height=3.4 * inch)
+        risk_png = generate_risk_zone_map_image(
+            risk_zone_array, array_shape=risk_zone_array.shape)
+        risk_img = RLImage(io.BytesIO(risk_png), width=_risk_pdf_w, height=_risk_pdf_h)
         story.append(risk_img)
         story.append(Paragraph(
             "Erosion Risk Index Zones (C\u00d7LS) \u2014 pixel-level RUSLE risk classification",
@@ -428,11 +462,15 @@ def generate_field_report(
         ))
         story.append(Spacer(1, 8))
 
-    # NDVI + Slope — side by side
-    ndvi_png  = generate_zone_map_image(ndvi_array, ndvi_threshold)
-    slope_png = generate_slope_map_image(slope_array)
-    map_w = 3.4 * inch
-    map_h = 2.2 * inch
+    # NDVI + Slope — side by side, aspect-corrected
+    _map_pdf_w = 3.4 * inch
+    _map_pdf_h = min(_map_pdf_w / _aspect, 2.8 * inch)
+    ndvi_png  = generate_zone_map_image(ndvi_array, ndvi_threshold,
+                                        array_shape=ndvi_array.shape)
+    slope_png = generate_slope_map_image(slope_array,
+                                         array_shape=slope_array.shape)
+    map_w = _map_pdf_w
+    map_h = _map_pdf_h
     ndvi_img  = RLImage(io.BytesIO(ndvi_png),  width=map_w, height=map_h)
     slope_img = RLImage(io.BytesIO(slope_png), width=map_w, height=map_h)
 
@@ -633,19 +671,19 @@ def generate_field_report(
     _term_status = termination_date if termination_date else "\u23f3 Pending \u2014 document at termination"
 
     eqip_data = [
-        ["Requirement", "Data Source", "Status"],
-        ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status],
-        ["Field boundary",       "Operator provided",        "Verify against FSA CLU records"],
-        ["Image date",           "GEE metadata",             image_date_str],
-        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_low}\u2013{biomass_high} lb/acre (\u00b140% NDVI proxy)"],
-        ["30% ground cover",     "NDVI threshold",           ground_cover_status],
-        ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site"],
-        ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site"],
-        ["Termination date",     "Field records required",   _term_status],
-        ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission"],
+        ["Requirement", "Data Source", "Status", "CCA\nInitials"],
+        ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status,        "\u2611"],
+        ["Field boundary",       "Operator provided",        "Verify against FSA CLU records", "\u2610"],
+        ["Image date",           "GEE metadata",             image_date_str,      "\u2611"],
+        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_low}\u2013{biomass_high} lb/acre (\u00b140% NDVI proxy)", "\u2611"],
+        ["30% ground cover",     "NDVI threshold",           ground_cover_status, "\u2611"],
+        ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site", "\u2610"],
+        ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site", "\u2610"],
+        ["Termination date",     "Field records required",   _term_status,        "\u2610"],
+        ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission", "\u2610"],
     ]
 
-    eqip_col_w = [1.8 * inch, 1.9 * inch, 3.3 * inch]
+    eqip_col_w = [1.6 * inch, 1.6 * inch, 2.8 * inch, 0.8 * inch]
     eqip_table = Table(
         [[Paragraph(str(cell), body_style) for cell in row] for row in eqip_data],
         colWidths=eqip_col_w,
@@ -661,11 +699,15 @@ def generate_field_report(
         ("TOPPADDING",     (0, 0), (-1, -1), 4),
         ("LEFTPADDING",    (0, 0), (-1, -1), 6),
         ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",          (3, 0), (3, -1),  "CENTER"),
+        ("FONTSIZE",       (3, 1), (3, -1),  12),
+        ("FONTNAME",       (3, 1), (3, -1),  "Helvetica"),
     ])
     eqip_table.setStyle(eqip_style)
     story.append(eqip_table)
     story.append(Paragraph(
-        "<i>Remote sensing confirms spatial cover crop presence. "
+        "<i>&#9746; = satellite-verified &nbsp;&#9744; = CCA field verification required. "
+        "Remote sensing confirms spatial cover crop presence. "
         "Seeding rate, species, and termination compliance require CCA field "
         "verification per NRCS Practice Code 340.</i>",
         small_style,

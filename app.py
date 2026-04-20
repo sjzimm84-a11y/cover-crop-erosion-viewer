@@ -20,7 +20,6 @@ from src.raster_utils import (
     raster_stats,
     zone_risk_summary,
 )
-from src.sample_data import ensure_sample_data
 from src.scoring import (
     DEFAULT_THRESHOLDS,
     score_erosion_concern,
@@ -113,7 +112,7 @@ st.divider()
 # Session state
 # ---------------------------------------------------------------------------
 if "ndvi_source" not in st.session_state:
-    st.session_state.ndvi_source = "auto"   # "auto" | "upload" | "sample"
+    st.session_state.ndvi_source = "auto"   # "auto" | "upload"
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -144,7 +143,7 @@ with st.sidebar:
 
     ndvi_mode = st.radio(
         "How to get NDVI?",
-        options=["Auto (Sentinel-2 API)", "Upload GeoTIFF", "Use sample data"],
+        options=["Auto (Sentinel-2 API)", "Upload GeoTIFF"],
         index=0,
     )
 
@@ -171,16 +170,13 @@ with st.sidebar:
     elif ndvi_mode == "Upload GeoTIFF":
         st.session_state.ndvi_source = "upload"
         ndvi_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"])
-    else:
-        st.session_state.ndvi_source = "sample"
-        ndvi_file = None
 
     st.divider()
     st.markdown("### 🏔️ DEM")
     dem_file = st.file_uploader(
         "Upload DEM GeoTIFF (optional)",
         type=["tif", "tiff", "img"],
-        help="Leave blank to use the 3m Iowa sample DEM.",
+        help="Leave blank to auto-fetch Iowa 3-meter DEM via WCS.",
     )
 
     st.divider()
@@ -199,11 +195,9 @@ with st.sidebar:
     slope_opacity = st.slider("Slope opacity", 0.0, 1.0, 0.1, 0.1)
 
 # ---------------------------------------------------------------------------
-# Temp dir and sample data
+# Temp dir
 # ---------------------------------------------------------------------------
-temp_dir     = Path(tempfile.mkdtemp())
-data_dir     = Path(__file__).parent / "data"
-sample_paths = ensure_sample_data(data_dir)
+temp_dir = Path(tempfile.mkdtemp())
 
 boundary_path = None
 ndvi_path     = None
@@ -218,7 +212,8 @@ ndvi_profile   = None
 if boundary_file is not None:
     boundary_path = save_uploaded_file(boundary_file, temp_dir)
 else:
-    boundary_path = sample_paths["field"]
+    st.error("Please upload a field boundary file (GeoJSON, zipped shapefile, or KML) to continue.")
+    st.stop()
 
 # DEM resolution — uploaded file path (used as fallback if WCS fails)
 dem_path = save_uploaded_file(dem_file, temp_dir) if dem_file else None
@@ -245,10 +240,11 @@ progress.progress(25)
 
 if ndvi_mode == "Auto (Sentinel-2 API)":
     if not SENTINEL_AVAILABLE:
-        st.warning(
-            f"⚠️ GEE module not loaded. Error: {SENTINEL_IMPORT_ERROR}"
+        st.error(
+            f"GEE module not loaded — cannot fetch NDVI automatically. "
+            f"Switch to 'Upload GeoTIFF' or resolve the import error: {SENTINEL_IMPORT_ERROR}"
         )
-        ndvi_path = sample_paths["ndvi"]
+        st.stop()
     else:
         try:
             from datetime import datetime as _dt, timedelta as _td
@@ -327,15 +323,16 @@ if ndvi_mode == "Auto (Sentinel-2 API)":
                         st.plotly_chart(fig_yoy, width='stretch')
 
         except Exception as exc:
-            st.warning(f"GEE NDVI unavailable: {exc}. Falling back to sample NDVI.")
-            ndvi_path = sample_paths["ndvi"]
+            st.error(f"GEE NDVI fetch failed: {exc}. Switch to 'Upload GeoTIFF' or check GEE credentials.")
+            st.stop()
 
 else:
-    # Upload or sample mode
-    if ndvi_mode == "Upload GeoTIFF" and ndvi_file is not None:
+    # Upload mode
+    if ndvi_file is not None:
         ndvi_path = save_uploaded_file(ndvi_file, temp_dir)
     else:
-        ndvi_path = sample_paths["ndvi"]
+        st.error("Please upload an NDVI GeoTIFF to continue.")
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # Clip rasters
@@ -359,7 +356,6 @@ try:
     dem_array, dem_transform, dem_profile, dem_source = get_dem_with_fallback(
         boundary_gdf=field_boundary,
         uploaded_dem_path=dem_path,
-        sample_dem_path=sample_paths["dem"],
     )
     if dem_source == "Iowa 3m WCS (auto)":
         st.success(f"🛰️ DEM auto-fetched from Iowa 3-meter Digital Elevation Model (Iowa DNR)")
@@ -475,7 +471,7 @@ if "ndvi_scene_earliest" not in st.session_state:
 if "ndvi_scene_count" not in st.session_state:
     st.session_state.ndvi_scene_count = None
 if "dem_source_label" not in st.session_state:
-    st.session_state.dem_source_label = "Sample DEM"
+    st.session_state.dem_source_label = "Iowa 3-meter DEM"
 if "soil_series" not in st.session_state:
     st.session_state.soil_series = "Not available"
 if "soil_k_factor" not in st.session_state:
