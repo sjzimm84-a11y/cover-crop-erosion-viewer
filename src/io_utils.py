@@ -34,9 +34,15 @@ def load_boundary_file(path: str) -> gpd.GeoDataFrame:
     else:
         path_to_vector = path
 
-    boundary = gpd.read_file(path_to_vector)
+    read_kwargs = {}
+    if Path(path_to_vector).suffix.lower() == ".kml":
+        read_kwargs["driver"] = "KML"
+    boundary = gpd.read_file(path_to_vector, **read_kwargs)
+
     if boundary.crs is None:
         boundary = boundary.set_crs("EPSG:4326")
+    if len(boundary) > 1:
+        boundary = boundary.dissolve().reset_index(drop=True)
     return boundary
 
 

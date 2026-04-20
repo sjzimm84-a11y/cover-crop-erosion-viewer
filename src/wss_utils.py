@@ -7,6 +7,7 @@ Free public API — no authentication required.
 
 import requests
 import geopandas as gpd
+from shapely.geometry import Polygon, MultiPolygon
 from typing import Dict, Any
 
 
@@ -17,7 +18,13 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     Returns dict with keys: series_name, k_factor, map_unit_name, pct_of_aoi
     """
     boundary_ll = boundary_gdf.to_crs("EPSG:4326")
-    geom = boundary_ll.geometry.iloc[0]
+    unified = boundary_ll.geometry.unary_union
+    if isinstance(unified, MultiPolygon):
+        geom = max(unified.geoms, key=lambda g: g.area)
+    elif isinstance(unified, Polygon):
+        geom = unified
+    else:
+        geom = unified.convex_hull
     coords = list(geom.exterior.coords)
     coord_str = ",".join([f"{x} {y}" for x, y in coords])
     wkt_polygon = f"POLYGON(({coord_str}))"
