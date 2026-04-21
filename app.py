@@ -640,20 +640,40 @@ zone_summary_display["Zone"] = (
     .fillna(zone_summary_display["Zone"])
 )
 
-_total_valid_acres = (
-    float(np.sum(~np.isnan(ndvi_array)))
-    * (10.0 ** 2) / 4046.86
-)
-zone_summary_display["Acres"] = (
-    zone_summary_display["% of Field"] / 100
-    * _total_valid_acres
-).round(1).astype(str) + " ac"
+# Compute total valid field acres from NDVI array
+_valid_px_count = int(np.sum(~np.isnan(ndvi_array)))
+_acres_per_pixel = (10.0 ** 2) / 4046.86
+_total_valid_acres = _valid_px_count * _acres_per_pixel
 
-_other_cols = [c for c in zone_summary_display.columns
-               if c not in ("Zone", "Acres", "% of Field")]
-zone_summary_display = zone_summary_display[
-    ["Zone", "Acres", "% of Field"] + _other_cols
-]
+# Add Acres column from percent × total acres
+if "% of Field" in zone_summary_display.columns:
+    _pct_col = "% of Field"
+else:
+    _pct_col = "percent"
+
+zone_summary_display.insert(
+    1,  # insert as second column, right after Zone
+    "Acres",
+    (
+        zone_summary_display[_pct_col]
+        .astype(float) / 100.0
+        * _total_valid_acres
+    ).round(1)
+)
+
+_total_row = pd.DataFrame([{
+    "Zone":      "Total",
+    "Acres":     round(_total_valid_acres, 1),
+    _pct_col:    100.0,
+    "NDVI Mean": "",
+    "Slope Mean (3m DEM, UTM)": "",
+}])
+zone_summary_display = pd.concat(
+    [zone_summary_display, _total_row],
+    ignore_index=True,
+)
+
+zone_summary_display = zone_summary_display.fillna("")
 
 st.dataframe(zone_summary_display, hide_index=True, use_container_width=True)
 
