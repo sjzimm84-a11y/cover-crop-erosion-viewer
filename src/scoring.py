@@ -323,6 +323,31 @@ def classify_risk_zones(risk_array: np.ndarray) -> np.ndarray:
     return zones
 
 
+def compute_ndvi_zone_summary(
+    ndvi_array: np.ndarray,
+    ndvi_threshold: float = 0.20,
+) -> "pd.DataFrame":
+    """Three-zone NDVI classification: Low cover / Marginal / Good cover."""
+    import pandas as pd
+    valid = ~np.isnan(ndvi_array)
+    total = float(np.sum(valid))
+    mid_upper = ndvi_threshold + 0.15
+    zones_def = [
+        ("Low cover",  (ndvi_array < ndvi_threshold) & valid),
+        ("Marginal",   (ndvi_array >= ndvi_threshold) & (ndvi_array < mid_upper) & valid),
+        ("Good cover", (ndvi_array >= mid_upper) & valid),
+    ]
+    rows = []
+    for label, mask in zones_def:
+        count = float(np.sum(mask))
+        rows.append({
+            "zone":      label,
+            "percent":   count / total * 100 if total > 0 else 0.0,
+            "ndvi_mean": float(np.nanmean(ndvi_array[mask])) if np.any(mask) else 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
 def score_erosion_concern(
     ndvi_stats: dict,
     slope_stats: dict,

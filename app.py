@@ -26,6 +26,7 @@ from src.scoring import (
     pixel_level_concern,
     pixel_risk_index,
     classify_risk_zones,
+    compute_ndvi_zone_summary,
     RESIDUE_OPTIONS,
     RESIDUE_ADJUSTMENTS,
 )
@@ -350,6 +351,27 @@ except Exception as exc:
     st.error(f"Could not clip NDVI: {exc}")
     st.stop()
 
+# Mask pixels outside field boundary — GEE returns bounding-box rectangle
+from rasterio.features import geometry_mask as _geom_mask
+_field_mask = None
+try:
+    _ndvi_crs = ndvi_profile.get("crs", "EPSG:4326")
+    _boundary_in_ndvi_crs = field_boundary.to_crs(_ndvi_crs)
+    _field_mask = _geom_mask(
+        [geom.__geo_interface__ for geom in _boundary_in_ndvi_crs.geometry],
+        transform=ndvi_transform,
+        invert=False,
+        out_shape=ndvi_array.shape,
+        all_touched=False,
+    )
+    ndvi_array = ndvi_array.copy()
+    ndvi_array[_field_mask] = np.nan
+except Exception as _mask_exc:
+    st.warning(
+        f"⚠️ Could not apply boundary mask to NDVI: "
+        f"{_mask_exc}. Acreage may be overstated."
+    )
+
 try:
     status.text("Fetching DEM (Iowa 3m WCS)...")
     progress.progress(55)
@@ -425,6 +447,14 @@ if ndvi_array.shape != slope_percent.shape:
         resampling=Resampling.bilinear,
     )
     slope_percent = slope_resampled
+
+# Apply boundary mask to slope after shape alignment with NDVI
+try:
+    if _field_mask is not None and slope_percent.shape == _field_mask.shape:
+        slope_percent = slope_percent.copy()
+        slope_percent[_field_mask] = np.nan
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # WSS dominant soil series lookup
@@ -602,11 +632,8 @@ icon = concern_colors.get(risk_result["concern_level"], "ℹ️")
 st.info(f"{icon} **CoverMap Advisory:** {risk_result['recommendation']}")
 
 # === SECTION 3: FIELD RISK ZONE SUMMARY ===
-zone_summary = zone_risk_summary(
-    ndvi_array, slope_percent,
-    ndvi_threshold=ndvi_threshold,
-    slope_threshold=slope_threshold,
-    zone_array=risk_result.get("zone_array"),
+zone_summary = compute_ndvi_zone_summary(
+    ndvi_array, ndvi_threshold=ndvi_threshold
 )
 
 st.subheader("📋 Cover Crop Stand — NDVI Zone Summary")
