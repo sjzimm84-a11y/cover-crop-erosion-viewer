@@ -239,7 +239,6 @@ except Exception as exc:
 status.text("Acquiring NDVI data...")
 progress.progress(25)
 
-_outside_mask = None
 if ndvi_mode == "Auto (Sentinel-2 API)":
     if not SENTINEL_AVAILABLE:
         st.error(
@@ -668,9 +667,22 @@ zone_summary_display["Zone"] = (
     .fillna(zone_summary_display["Zone"])
 )
 
-# Compute total valid field acres from NDVI array
+# Compute total valid field acres — pixel area derived from raster transform and CRS
 _valid_px_count = int(np.sum(~np.isnan(ndvi_array)))
-_acres_per_pixel = (10.0 ** 2) / 4046.86
+_px_w = abs(ndvi_transform.a)
+_px_h = abs(ndvi_transform.e)
+_ndvi_crs_obj = ndvi_profile.get("crs")
+if _ndvi_crs_obj and _ndvi_crs_obj.is_geographic:
+    _lat_rad = np.radians(
+        field_boundary.to_crs("EPSG:4326").geometry.centroid.iloc[0].y
+    )
+    _pixel_area_m2 = (
+        (_px_w * 111_320.0 * np.cos(_lat_rad)) *
+        (_px_h * 110_574.0)
+    )
+else:
+    _pixel_area_m2 = _px_w * _px_h
+_acres_per_pixel = _pixel_area_m2 / 4046.86
 _total_valid_acres = _valid_px_count * _acres_per_pixel
 
 # Add Acres column from percent × total acres
@@ -732,8 +744,7 @@ zone_counts  = risk_result.get("zone_counts", {})
 total_pixels = sum(zone_counts.values())
 
 if zone_counts and total_pixels > 0:
-    pixel_size_m    = 10.0
-    acres_per_pixel = (pixel_size_m ** 2) / 4046.86
+    acres_per_pixel = _acres_per_pixel
 
     risk_zone_rows = []
     risk_zone_config = [
@@ -786,7 +797,7 @@ _biomass_high  = round(_biomass_lbac * 1.4 / 50) * 50
 _valid_px      = ndvi_array[
         (ndvi_array > 0.05) & ~np.isnan(ndvi_array)]
 _pct_above_020 = (np.sum(_valid_px > 0.20) / _valid_px.size * 100) if _valid_px.size > 0 else 0.0
-_valid_pct     = (_valid_px.size / ndvi_array.size * 100) if ndvi_array.size > 0 else 0.0
+_valid_pct     = (_valid_px.size / _valid_px_count * 100) if _valid_px_count > 0 else 0.0
 
 _valid_warning = None
 if _valid_pct < 50:
