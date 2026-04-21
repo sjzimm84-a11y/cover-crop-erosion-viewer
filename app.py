@@ -671,8 +671,7 @@ zone_summary_display["Zone"] = (
 _valid_px_count = int(np.sum(~np.isnan(ndvi_array)))
 _px_w = abs(ndvi_transform.a)
 _px_h = abs(ndvi_transform.e)
-_ndvi_crs_obj = ndvi_profile.get("crs")
-if _ndvi_crs_obj and _ndvi_crs_obj.is_geographic:
+if _px_w < 1.0:  # degree units — convert to metres at field centroid latitude
     _lat_rad = np.radians(
         field_boundary.to_crs("EPSG:4326").geometry.centroid.iloc[0].y
     )
@@ -680,7 +679,7 @@ if _ndvi_crs_obj and _ndvi_crs_obj.is_geographic:
         (_px_w * 111_320.0 * np.cos(_lat_rad)) *
         (_px_h * 110_574.0)
     )
-else:
+else:  # projected units already in metres
     _pixel_area_m2 = _px_w * _px_h
 _acres_per_pixel = _pixel_area_m2 / 4046.86
 _total_valid_acres = _valid_px_count * _acres_per_pixel
