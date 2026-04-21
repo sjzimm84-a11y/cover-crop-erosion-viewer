@@ -239,6 +239,7 @@ except Exception as exc:
 status.text("Acquiring NDVI data...")
 progress.progress(25)
 
+_outside_mask = None
 if ndvi_mode == "Auto (Sentinel-2 API)":
     if not SENTINEL_AVAILABLE:
         st.error(
@@ -704,7 +705,23 @@ zone_summary_display = zone_summary_display.fillna("")
 
 st.dataframe(zone_summary_display, hide_index=True, use_container_width=True)
 
-zone_chart = build_zone_risk_chart(zone_summary)
+_chart_label_map = {
+    "Low cover":  ndvi_low_label,
+    "Marginal":   ndvi_mid_label,
+    "Good cover": ndvi_good_label,
+}
+zone_summary_chart = zone_summary.copy()
+zone_summary_chart["zone"] = (
+    zone_summary_chart["zone"]
+    .map(_chart_label_map)
+    .fillna(zone_summary_chart["zone"])
+)
+zone_chart = build_zone_risk_chart(
+    zone_summary_chart,
+    ndvi_low_label=ndvi_low_label,
+    ndvi_mid_label=ndvi_mid_label,
+    ndvi_good_label=ndvi_good_label,
+)
 zone_chart.update_layout(
     plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#c9d1d9"
 )

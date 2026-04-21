@@ -185,20 +185,36 @@ def build_map_with_rasters(
     return m
 
 
-def build_zone_risk_chart(zone_summary: Any) -> Any:
+def build_zone_risk_chart(
+    zone_summary: Any,
+    ndvi_low_label:  str = "Low cover",
+    ndvi_mid_label:  str = "Marginal",
+    ndvi_good_label: str = "Good cover",
+) -> Any:
     if zone_summary.empty:
         return px.bar(title="No zone risk categories found.")
 
     color_map = {
-        "Critical risk": "#EF4444",
-        "High risk":     "#F97316",
-        "Moderate risk": "#FACC15",
-        "Low risk":      "#22C55E",
-        # legacy labels (fallback)
-        "High concern":  "#cf222e",
-        "Low cover":     "#9a6700",
-        "Steep slope":   "#0550ae",
-        "Normal":        "#1a7f37",
+        # Dynamic NDVI zone labels (param-based, match _chart_label_map output in app.py)
+        ndvi_low_label:   "#F97316",
+        ndvi_mid_label:   "#38BDF8",
+        ndvi_good_label:  "#FACC15",
+        # Risk Index zone labels
+        "Critical risk":  "#EF4444",
+        "High risk":      "#F97316",
+        "Moderate risk":  "#FACC15",
+        "Low risk":       "#22C55E",
+        # Raw NDVI zone keys from compute_ndvi_zone_summary (fallback)
+        "Low cover":      "#F97316",
+        "Marginal":       "#38BDF8",
+        "Good cover":     "#FACC15",
+        # Capitalized variants
+        "Low Cover":      "#F97316",
+        "Good Cover":     "#FACC15",
+        # Legacy fallback labels
+        "High concern":   "#cf222e",
+        "Steep slope":    "#0550ae",
+        "Normal":         "#1a7f37",
     }
     fig = px.bar(
         zone_summary,
