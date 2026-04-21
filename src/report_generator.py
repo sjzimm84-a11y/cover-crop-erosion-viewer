@@ -401,6 +401,14 @@ def generate_field_report(
             else soil_series
         )
 
+    # Derive previous crop display — "Not recorded" only when residue system is also unknown
+    _prev_crop_display = (
+        previous_crop if previous_crop
+        else ("Not recorded"
+              if not residue_system or "Unknown" in residue_system
+              else "See previous crop / tillage")
+    )
+
     field_data = [
         [
             Paragraph(f"<b>Field:</b> {field_name}", body_style),
@@ -409,7 +417,7 @@ def generate_field_report(
             Paragraph(f"<b>Report Date:</b> {report_date}", body_style),
         ],
         [
-            Paragraph(f"<b>Previous crop:</b> {previous_crop or 'Not recorded'}", body_style),
+            Paragraph(f"<b>Previous crop:</b> {_prev_crop_display}", body_style),
             Paragraph(f"<b>Termination date:</b> {termination_date or '⏳ Pending — document at termination'}", body_style),
             Paragraph(f"<b>Dominant soil series:</b> {_soil_display}", body_style),
             Paragraph(f"<b>Previous crop / tillage:</b> {residue_system or 'Not recorded'}", body_style),
@@ -692,17 +700,20 @@ def generate_field_report(
     )
     _term_status = termination_date if termination_date else "\u23f3 Pending \u2014 document at termination"
 
+    _SAT_VER = "Satellite\nVerified"
+    _CCA_REQ = ""
+
     eqip_data = [
         ["Requirement", "Data Source", "Status", "CCA\nInitials"],
-        ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status,        "\u2611"],
-        ["Field boundary",       "Operator provided",        "Verify against FSA CLU records", "\u2610"],
-        ["Image date",           "GEE metadata",             image_date_str,      "\u2611"],
-        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_low}\u2013{biomass_high} lb/acre (\u00b140% NDVI proxy)", "\u2611"],
-        ["30% ground cover",     "NDVI threshold",           ground_cover_status, "\u2611"],
-        ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site", "\u2610"],
-        ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site", "\u2610"],
-        ["Termination date",     "Field records required",   _term_status,        "\u2610"],
-        ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission", "\u2610"],
+        ["Cover crop present",   "Sentinel-2 NDVI > 0.20",  cover_status,        _SAT_VER],
+        ["Field boundary",       "Operator provided",        "Verify against FSA CLU records", _CCA_REQ],
+        ["Image date",           "GEE metadata",             image_date_str,      _SAT_VER],
+        ["Estimated biomass",    "NDVI proxy",               f"~{biomass_low}\u2013{biomass_high} lb/acre (\u00b140% NDVI proxy)", _SAT_VER],
+        ["30% ground cover",     "NDVI threshold",           ground_cover_status, _SAT_VER],
+        ["Seeding rate",         "Field records required",   "\U0001f4cb CCA to verify on-site", _CCA_REQ],
+        ["Species confirmation", "Field records required",   "\U0001f4cb CCA to verify on-site", _CCA_REQ],
+        ["Termination date",     "Field records required",   _term_status,        _CCA_REQ],
+        ["Cooperator signature", "Physical form required",   "\U0001f4cb Required for EQIP submission", _CCA_REQ],
     ]
 
     eqip_col_w = [1.6 * inch, 1.6 * inch, 2.8 * inch, 0.8 * inch]
@@ -722,16 +733,18 @@ def generate_field_report(
         ("LEFTPADDING",    (0, 0), (-1, -1), 6),
         ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN",          (3, 0), (3, -1),  "CENTER"),
-        ("FONTSIZE",       (3, 1), (3, -1),  12),
-        ("FONTNAME",       (3, 1), (3, -1),  "Helvetica"),
+        ("FONTSIZE",       (3, 1), (3, -1),  8),
     ])
+    for _r in [1, 3, 4, 5]:    # satellite-verified rows — green label
+        eqip_style.add("TEXTCOLOR", (3, _r), (3, _r), colors.HexColor("#166534"))
+    for _r in [2, 6, 7, 8, 9]: # CCA-required rows — underline for initials
+        eqip_style.add("LINEBELOW", (3, _r), (3, _r), 0.75, colors.HexColor("#555555"))
     eqip_table.setStyle(eqip_style)
     story.append(eqip_table)
     story.append(Paragraph(
-        "<i>&#9746; = satellite-verified &nbsp;&#9744; = CCA field verification required. "
-        "Remote sensing confirms spatial cover crop presence. "
-        "Seeding rate, species, and termination compliance require CCA field "
-        "verification per NRCS Practice Code 340.</i>",
+        "<i>Satellite Verified = confirmed by CoverMap remote sensing analysis | "
+        "blank line = CCA field verification and initials required before EQIP "
+        "submission per NRCS Practice Code 340</i>",
         small_style,
     ))
     story.append(Spacer(1, 6))
@@ -842,6 +855,14 @@ def generate_field_report(
             f"use only \u2014 not a substitute for a site-specific RUSLE2 run or official "
             f"NRCS determination.</i>",
             small_style,
+        ))
+        story.append(Paragraph(
+            "<i>Field-average estimate using mean slope and dominant soil series. "
+            "Steep backslope units likely exceed this estimate significantly. "
+            "RUSLE2 analysis of the dominant critical area will produce higher values "
+            "for the same field. See RUSLE2 comparison note in Technical Guide.</i>",
+            ParagraphStyle("SoilLossContext", parent=small_style,
+                           textColor=colors.HexColor("#92400e")),
         ))
     else:
         story.append(Paragraph(
