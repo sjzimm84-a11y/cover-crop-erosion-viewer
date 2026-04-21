@@ -640,6 +640,21 @@ zone_summary_display["Zone"] = (
     .fillna(zone_summary_display["Zone"])
 )
 
+_total_valid_acres = (
+    float(np.sum(~np.isnan(ndvi_array)))
+    * (10.0 ** 2) / 4046.86
+)
+zone_summary_display["Acres"] = (
+    zone_summary_display["% of Field"] / 100
+    * _total_valid_acres
+).round(1).astype(str) + " ac"
+
+_other_cols = [c for c in zone_summary_display.columns
+               if c not in ("Zone", "Acres", "% of Field")]
+zone_summary_display = zone_summary_display[
+    ["Zone", "Acres", "% of Field"] + _other_cols
+]
+
 st.dataframe(zone_summary_display, hide_index=True, use_container_width=True)
 
 zone_chart = build_zone_risk_chart(zone_summary)

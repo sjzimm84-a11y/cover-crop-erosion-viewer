@@ -548,21 +548,27 @@ def generate_field_report(
 
     zone_acres  = calculate_zone_acres(ndvi_array, ndvi_threshold)
     total_acres = zone_acres.get("Total", 1)
-    zone_display_rows = [
-        ("Low cover",  f"Low cover (NDVI < {ndvi_threshold:.2f})",             colors.HexColor("#FEE8D5")),
-        ("Marginal",   f"Marginal ({ndvi_threshold:.2f}\u2013{_marginal_upper:.2f})", colors.HexColor("#E0F2FE")),
-        ("Good cover", f"Good cover (NDVI > {_marginal_upper:.2f})",            colors.HexColor("#FEF9C3")),
-    ]
-    ndvi_zone_rows = [["Zone", "Acres", "% Field"]]
-    ndvi_zone_bg  = []
-    for i, (key, label, bg) in enumerate(zone_display_rows, start=1):
-        acres = zone_acres.get(key, 0)
+
+    ndvi_low_label  = f"Low Cover  (NDVI < {ndvi_threshold:.2f})"
+    ndvi_mid_label  = (
+        f"Marginal  (NDVI {ndvi_threshold:.2f}"
+        f"\u2013{_marginal_upper:.2f})")
+    ndvi_good_label = f"Good Cover  (NDVI > {_marginal_upper:.2f})"
+
+    ndvi_zone_rows = [["Zone", "Acres", "% of Field"]]
+    ndvi_zone_bg   = []
+    for i, (zone_key, label, bg) in enumerate([
+        ("Low cover",  ndvi_low_label,  colors.HexColor("#FEE8D5")),
+        ("Marginal",   ndvi_mid_label,  colors.HexColor("#E0F2FE")),
+        ("Good cover", ndvi_good_label, colors.HexColor("#FEF9C3")),
+    ], start=1):
+        acres = zone_acres.get(zone_key, 0)
         pct   = acres / total_acres * 100 if total_acres > 0 else 0
         ndvi_zone_rows.append([label, f"{acres:.1f}", f"{pct:.0f}%"])
         ndvi_zone_bg.append(("BACKGROUND", (0, i), (-1, i), bg))
     ndvi_zone_rows.append(["Total", f"{total_acres:.1f}", "100%"])
 
-    ndvi_zone_table = Table(ndvi_zone_rows, colWidths=[3.5 * inch, 1.0 * inch, 1.0 * inch])
+    ndvi_zone_table = Table(ndvi_zone_rows, colWidths=[3.2 * inch, 1.0 * inch, 1.0 * inch])
     ndvi_zone_table.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
         ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
@@ -580,44 +586,60 @@ def generate_field_report(
     story.append(Spacer(1, 8))
 
     # --- Risk Index Zone Summary ---
-    if zone_counts:
+    if zone_counts and sum(zone_counts.values()) > 0:
         story.append(HRFlowable(width="100%", thickness=0.5,
                                 color=MID_GRAY, spaceAfter=4))
         story.append(Paragraph("Erosion Risk Zone Summary (C\u00d7LS)", section_style))
 
-        RISK_ZONE_DEFS = [
-            (4, "Critical risk (\u22651.5)",   colors.HexColor("#fecaca")),
-            (3, "High risk (0.7\u20131.5)",    colors.HexColor("#fee2e2")),
-            (2, "Moderate risk (0.3\u20130.7)", colors.HexColor("#fef9c3")),
-            (1, "Low risk (<0.3)",             colors.HexColor("#dcfce7")),
-        ]
-        total_zone_px   = sum(zone_counts.values()) or 1
-        risk_zone_rows  = [["Zone", "Pixels", "% Field"]]
-        risk_zone_bg    = []
-        actual_row      = 1
-        for val, label, bg in RISK_ZONE_DEFS:
-            px = zone_counts.get(val, 0)
-            if px == 0:
-                continue
-            pct = px / total_zone_px * 100
-            risk_zone_rows.append([label, str(px), f"{pct:.0f}%"])
-            risk_zone_bg.append(("BACKGROUND", (0, actual_row), (-1, actual_row), bg))
-            actual_row += 1
+        px_area_acres = (10.0 ** 2) / 4046.86
+        total_px = sum(zone_counts.values())
 
-        risk_zone_t = Table(risk_zone_rows, colWidths=[3.5 * inch, 1.0 * inch, 1.0 * inch])
-        risk_zone_t.setStyle(TableStyle([
+        ri_config = [
+            (4, "Critical Risk", "#EF4444", "#fecaca", "> 1.5"),
+            (3, "High Risk",     "#F97316", "#FEE8D5", "0.7\u20131.5"),
+            (2, "Moderate Risk", "#FACC15", "#FEF9C3", "0.3\u20130.7"),
+            (1, "Low Risk",      "#22C55E", "#dcfce7", "< 0.3"),
+        ]
+        ri_rows = [["Zone", "C\u00d7LS Range", "Acres", "% of Field"]]
+        for val, label, _, bg, thresh in ri_config:
+            count = zone_counts.get(val, 0)
+            acres = count * px_area_acres
+            pct   = count / total_px * 100 if total_px > 0 else 0
+            ri_rows.append([label, thresh, f"{acres:.1f}", f"{pct:.0f}%"])
+
+        ri_style = TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
             ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
             ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
             ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-            ("ALIGN",         (1, 0), (2, -1),  "CENTER"),
+            ("ALIGN",         (1, 0), (-1, -1), "CENTER"),
             ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-        ] + risk_zone_bg))
-        story.append(risk_zone_t)
-        story.append(Spacer(1, 8))
+        ])
+        bg_map = {4: "#fecaca", 3: "#FEE8D5", 2: "#FEF9C3", 1: "#dcfce7"}
+        for idx, (val, _, _, _, _) in enumerate(ri_config, start=1):
+            ri_style.add(
+                "BACKGROUND",
+                (0, idx), (-1, idx),
+                colors.HexColor(bg_map[val]),
+            )
+
+        ri_table = Table(
+            ri_rows,
+            colWidths=[1.8 * inch, 1.2 * inch, 1.0 * inch, 1.0 * inch],
+        )
+        ri_table.setStyle(ri_style)
+        story.append(ri_table)
+        story.append(Paragraph(
+            "<i>Risk Index = C-factor (NDVI) \u00d7 "
+            "LS-factor (slope). Boundary-masked field pixels only. "
+            "Critical >1.5 \u00b7 High 0.7\u20131.5 "
+            "\u00b7 Moderate 0.3\u20130.7 \u00b7 Low <0.3</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 6))
 
     # --- Amber disclaimer ---
     _img_date_label = ndvi_scene_date or ndvi_date_to or "unknown"
