@@ -995,6 +995,7 @@ with col_dl1:
                     soil_loss_result=risk_result.get("soil_loss"),
                     r_factor=st.session_state.get("r_factor", 150.0),
                     r_factor_note=st.session_state.get("r_factor_note"),
+                    acres_per_pixel=_acres_per_pixel,
                 )
                 st.download_button(
                     label="⬇️ Download PDF Report",

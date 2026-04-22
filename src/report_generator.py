@@ -243,11 +243,9 @@ def generate_risk_zone_map_image(
 def calculate_zone_acres(
     ndvi_array: np.ndarray,
     ndvi_threshold: float,
-    pixel_size_m: float = 10.0,
+    acres_per_pixel: float = (10.0 ** 2) / 4046.86,
 ) -> Dict[str, float]:
     """Calculate acres per zone from pixel counts."""
-    m2_per_pixel = pixel_size_m ** 2
-    acres_per_pixel = m2_per_pixel / 4046.86
 
     marginal_upper = ndvi_threshold + 0.15
     valid = ~np.isnan(ndvi_array)
@@ -304,6 +302,7 @@ def generate_field_report(
     soil_loss_result: Optional[Dict[str, Any]] = None,
     r_factor: float = 150.0,
     r_factor_note: Optional[str] = None,
+    acres_per_pixel: float = (10.0 ** 2) / 4046.86,
 ) -> bytes:
     """
     Generate single-page PDF field summary report.
@@ -554,7 +553,7 @@ def generate_field_report(
                             color=MID_GRAY, spaceAfter=4))
     story.append(Paragraph("Cover Crop Stand \u2014 NDVI Zone Summary", section_style))
 
-    zone_acres  = calculate_zone_acres(ndvi_array, ndvi_threshold)
+    zone_acres  = calculate_zone_acres(ndvi_array, ndvi_threshold, acres_per_pixel=acres_per_pixel)
     total_acres = zone_acres.get("Total", 1)
 
     ndvi_low_label  = f"Low Cover  (NDVI < {ndvi_threshold:.2f})"
@@ -599,7 +598,7 @@ def generate_field_report(
                                 color=MID_GRAY, spaceAfter=4))
         story.append(Paragraph("Erosion Risk Zone Summary (C\u00d7LS)", section_style))
 
-        px_area_acres = (10.0 ** 2) / 4046.86
+        px_area_acres = acres_per_pixel
         total_px = sum(zone_counts.values())
 
         ri_config = [
