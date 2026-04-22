@@ -421,11 +421,19 @@ def score_erosion_concern(
         if valid_count > 0:
             pct_critical = float((zone_array_out[valid_mask] == 4).sum() / valid_count * 100)
             pct_high     = float((zone_array_out[valid_mask] == 3).sum() / valid_count * 100)
-            if pct_critical > 10:
+            # Concern level thresholds — CoverMap v1.3
+            # Critical: >=20% Critical pixels
+            # High:     >=5% Critical OR >40% High+Critical
+            # Moderate: 20-40% High+Critical AND Critical <5%
+            # Low:      <20% High+Critical AND Critical <5%
+            # Priority: evaluated top-down, first match wins
+            # Source: CoverMap Technical Guide v1.3 Section 6.3
+            pct_high_critical = pct_critical + pct_high
+            if pct_critical >= 20:
                 concern = "Critical"
-            elif pct_critical > 0 or pct_high > 25:
+            elif pct_critical >= 5 or pct_high_critical > 40:
                 concern = "High"
-            elif pct_high > 10:
+            elif pct_high_critical >= 20 and pct_critical < 5:
                 concern = "Moderate"
             else:
                 concern = "Low"
