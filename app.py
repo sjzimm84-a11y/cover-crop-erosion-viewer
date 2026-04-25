@@ -31,7 +31,7 @@ from src.scoring import (
     RESIDUE_ADJUSTMENTS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
-from src.report_generator import generate_field_report
+from src.report_generator import generate_field_report, generate_producer_report
 from src.iowa_dem_utils import get_dem_with_fallback
 
 # GEE NDVI imports — graceful fallback if not configured
@@ -849,10 +849,8 @@ st.caption(
 
 # === SECTION 5: COVER CROP METRICS ===
 st.subheader("📊 Cover Crop Metrics")
-_soil_label = st.session_state.get("soil_series", "—") or "—"
-_soil_kf    = st.session_state.get("soil_k_factor")
-if _soil_kf:
-    _soil_label = f"{_soil_label} (K={_soil_kf})"
+_soil_series = st.session_state.get("soil_series", "—") or "—"
+_soil_kf     = st.session_state.get("soil_k_factor")
 c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 c1.metric("NDVI Mean",      f"{ndvi_stats['mean']:.3f}")
 c2.metric("NDVI Min",       f"{ndvi_stats['min']:.3f}")
@@ -861,10 +859,12 @@ c4.metric("Slope Mean (%)", f"{slope_stats['mean']:.1f}%")
 c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
           help="RUSLE C-factor (residue-adjusted). Lower = better cover.")
 c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
-          help="Unitless erosion risk index (C-factor × LS-factor). "
-               "Scale: <0.3 Minimal · 0.3-0.7 Moderate · 0.7-1.5 High · >1.5 Critical")
-c7.metric("Dominant Soil",  _soil_label,
-          help="Dominant soil series from USDA Web Soil Survey SSURGO")
+          help="Unitless erosion risk index (C-factor × LS-factor).")
+if _soil_kf:
+    c7.metric("Soil K-Factor", f"{_soil_kf:.3f}",
+              help=f"Soil series: {_soil_series} — K-factor from SSURGO")
+else:
+    c7.metric("Dominant Soil", _soil_series)
 
 if risk_result["residue_multiplier"] < 1.0:
     st.caption(
@@ -928,21 +928,7 @@ else:
     )
 
 # === SECTION 7: GENERATE REPORT ===
-report_df = pd.DataFrame([
-    {"Metric": "NDVI Mean",        "Value": ndvi_stats["mean"]},
-    {"Metric": "NDVI Min",         "Value": ndvi_stats["min"]},
-    {"Metric": "NDVI Max",         "Value": ndvi_stats["max"]},
-    {"Metric": "NDVI Date From",   "Value": st.session_state.ndvi_date_from or "N/A"},
-    {"Metric": "NDVI Date To",     "Value": st.session_state.ndvi_date_to   or "N/A"},
-    {"Metric": "Slope Mean (%)",   "Value": slope_stats["mean"]},
-    {"Metric": "C-Factor (RUSLE)", "Value": risk_result["c_factor"]},
-    {"Metric": "LS-Factor",        "Value": risk_result["ls_factor"]},
-    {"Metric": "RUSLE CxLS Score", "Value": risk_result["rusle_score"]},
-    {"Metric": "Erosion Concern",  "Value": risk_result["concern_level"]},
-    {"Metric": "Recommendation",   "Value": risk_result["recommendation"]},
-])
-
-st.subheader("📄 Generate Field Report")
+st.subheader("📄 Generate Report")
 col_a, col_b, col_c = st.columns(3)
 with col_a:
     _default_field_name = Path(boundary_file.name).stem if boundary_file else "North Field"
@@ -962,60 +948,69 @@ with col_f:
     pdf_previous_crop = st.text_input(
         "Previous crop (optional)", value="", placeholder="e.g. Corn, Soybeans")
 
-col_dl1, col_dl2 = st.columns(2)
+_pdf_kwargs = dict(
+    field_name=pdf_field_name or "Field",
+    farm_name=pdf_farm_name   or "",
+    county=pdf_county         or "Iowa",
+    ndvi_array=ndvi_array,
+    slope_array=slope_percent,
+    ndvi_stats=ndvi_stats,
+    slope_stats=slope_stats,
+    risk_result=risk_result,
+    zone_summary=zone_summary,
+    risk_zone_array=_risk_zone_preview,
+    zone_counts=risk_result.get("zone_counts", {}),
+    ndvi_threshold=ndvi_threshold,
+    slope_threshold=slope_threshold,
+    ndvi_date_from=st.session_state.ndvi_date_from,
+    ndvi_date_to=st.session_state.ndvi_date_to,
+    ndvi_scene_date=_image_date_str,
+    dem_source=st.session_state.get("dem_source_label", "Iowa 3-meter Digital Elevation Model (Iowa DNR)"),
+    termination_date=pdf_termination_date or None,
+    cca_name=pdf_cca_name or "Stephen Zimmerman, CCA MS",
+    previous_crop=pdf_previous_crop or None,
+    soil_series=st.session_state.get("soil_series"),
+    soil_k_factor=st.session_state.get("soil_k_factor"),
+    residue_system=residue_system,
+    soil_loss_result=risk_result.get("soil_loss"),
+    r_factor=st.session_state.get("r_factor", 150.0),
+    r_factor_note=st.session_state.get("r_factor_note"),
+    acres_per_pixel=_acres_per_pixel,
+)
 
-with col_dl1:
-    if st.button("📋 Generate PDF Report", type="primary", use_container_width=True):
-        with st.spinner("Building PDF report..."):
+col_cca, col_prod = st.columns(2)
+
+with col_cca:
+    st.caption("Full documentation with EQIP checklist and CCA signature block.")
+    if st.button("📋 CCA Report", use_container_width=True):
+        with st.spinner("Generating CCA report..."):
             try:
-                pdf_bytes = generate_field_report(
-                    field_name=pdf_field_name or "Field",
-                    farm_name=pdf_farm_name   or "",
-                    county=pdf_county         or "Iowa",
-                    ndvi_array=ndvi_array,
-                    slope_array=slope_percent,
-                    ndvi_stats=ndvi_stats,
-                    slope_stats=slope_stats,
-                    risk_result=risk_result,
-                    zone_summary=zone_summary,
-                    risk_zone_array=_risk_zone_preview,
-                    zone_counts=risk_result.get("zone_counts", {}),
-                    ndvi_threshold=ndvi_threshold,
-                    slope_threshold=slope_threshold,
-                    ndvi_date_from=st.session_state.ndvi_date_from,
-                    ndvi_date_to=st.session_state.ndvi_date_to,
-                    ndvi_scene_date=_image_date_str,
-                    dem_source=st.session_state.get("dem_source_label", "Iowa 3-meter Digital Elevation Model (Iowa DNR)"),
-                    termination_date=pdf_termination_date or None,
-                    cca_name=pdf_cca_name or "Stephen Zimmerman, CCA MS",
-                    previous_crop=pdf_previous_crop or None,
-                    soil_series=st.session_state.get("soil_series"),
-                    soil_k_factor=st.session_state.get("soil_k_factor"),
-                    residue_system=residue_system,
-                    soil_loss_result=risk_result.get("soil_loss"),
-                    r_factor=st.session_state.get("r_factor", 150.0),
-                    r_factor_note=st.session_state.get("r_factor_note"),
-                    acres_per_pixel=_acres_per_pixel,
-                )
+                pdf_bytes = generate_field_report(**_pdf_kwargs)
                 st.download_button(
-                    label="⬇️ Download PDF Report",
+                    label="⬇️ Download CCA Report PDF",
                     data=pdf_bytes,
-                    file_name=f"covermap_report_{(pdf_field_name or 'field').replace(' ','_')}.pdf",
+                    file_name=f"CoverMap_CCA_{(pdf_field_name or 'Field').replace(' ','_')}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                 )
-                st.success("PDF ready — click Download above.")
             except Exception as pdf_exc:
                 st.error(f"PDF generation failed: {pdf_exc}")
 
-with col_dl2:
-    st.download_button(
-        label="⬇️ Download CSV Data",
-        data=report_df.to_csv(index=False).encode("utf-8"),
-        file_name="erosion_report_nrcs.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
+with col_prod:
+    st.caption("Simplified field summary for sharing with producers.")
+    if st.button("🌾 Producer Report", use_container_width=True):
+        with st.spinner("Generating producer report..."):
+            try:
+                pdf_bytes = generate_producer_report(**_pdf_kwargs)
+                st.download_button(
+                    label="⬇️ Download Producer Report PDF",
+                    data=pdf_bytes,
+                    file_name=f"CoverMap_Field_{(pdf_field_name or 'Field').replace(' ','_')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as pdf_exc:
+                st.error(f"PDF generation failed: {pdf_exc}")
 
 st.divider()
 st.caption(
