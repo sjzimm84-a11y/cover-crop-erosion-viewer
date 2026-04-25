@@ -861,7 +861,7 @@ c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
 c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
           help="Unitless erosion risk index (C-factor × LS-factor).")
 if _soil_kf:
-    c7.metric("Soil K-Factor", f"{_soil_kf:.3f}",
+    c7.metric("Soil K-Factor", f"{float(_soil_kf):.3f}",
               help=f"Soil series: {_soil_series} — K-factor from SSURGO")
 else:
     c7.metric("Dominant Soil", _soil_series)
