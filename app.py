@@ -32,6 +32,7 @@ from src.scoring import (
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report, generate_producer_report
+from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
 # GEE NDVI imports — graceful fallback if not configured
@@ -1011,6 +1012,30 @@ with col_prod:
                 )
             except Exception as pdf_exc:
                 st.error(f"PDF generation failed: {pdf_exc}")
+
+st.markdown("**GIS Export**")
+_shp_zip = None
+try:
+    _shp_zip = export_risk_zones_shp(
+        risk_zone_array=_risk_zone_preview,
+        transform=ndvi_transform,
+        crs=ndvi_profile.get("crs"),
+        field_name=pdf_field_name or "field",
+    )
+except Exception as _shp_exc:
+    st.warning(f"Risk zone shapefile export failed: {_shp_exc}")
+
+if _shp_zip:
+    _shp_filename = f"{(pdf_field_name or 'field').replace(' ', '_')}_erosion_risk_zones.zip"
+    st.download_button(
+        label="⬇️ Download Risk Zone SHP",
+        data=_shp_zip,
+        file_name=_shp_filename,
+        mime="application/zip",
+        use_container_width=True,
+    )
+else:
+    st.warning("No valid risk zone pixels found — shapefile not available.")
 
 st.divider()
 st.caption(
