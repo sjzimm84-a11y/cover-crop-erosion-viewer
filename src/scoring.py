@@ -26,11 +26,9 @@ NDVI-to-C-factor calibration:
     minimum of 1,500 kg/ha at approximately NDVI 0.25.
 
 Limitation — LS-factor:
-    Slope length is not explicitly computed — LS-factor is derived from per-pixel
-    slope percent using a simplified lookup table. This produces spatially explicit
-    Risk Index values appropriate for field advisory use. True RUSLE LS-factor
-    requires slope length from flow accumulation analysis and is planned for a
-    future version.
+    LS-factor now uses continuous RUSLE S-factor formula (McCool et al. 1987)
+    with fixed 100m assumed slope length. Slope length from flow accumulation
+    remains a planned Phase 2 improvement.
 """
 
 from typing import Dict, Any, Optional
@@ -256,11 +254,27 @@ def _lookup_c_factor(ndvi_mean: float) -> float:
 
 
 def _lookup_ls_factor(slope_mean: float) -> float:
-    """Map mean slope % to simplified LS-factor."""
-    for (slope_min, slope_max), ls in LS_FACTOR_TABLE.items():
-        if slope_min <= slope_mean < slope_max:
-            return ls
-    return 7.0  # fallback — steepest category
+    """Map mean slope % to LS-factor via continuous analytical formula."""
+    return float(_analytical_ls_factor(slope_mean))
+
+
+def _analytical_ls_factor(slope_pct):
+    """Continuous RUSLE S-factor formula (McCool et al. 1987)
+    with fixed 100m assumed slope length. Replaces 7-bin stepped lookup.
+    Handles scalar and numpy array input."""
+    slope_pct = np.asarray(slope_pct, dtype=float)
+    theta = np.arctan(slope_pct / 100.0)
+    S = np.where(
+        slope_pct < 9,
+        10.8 * np.sin(theta) + 0.03,
+        16.8 * np.sin(theta) - 0.50,
+    )
+    S = np.maximum(S, 0.03)
+    m = np.where(slope_pct < 1, 0.2,
+        np.where(slope_pct < 3, 0.3,
+        np.where(slope_pct < 5, 0.4, 0.5)))
+    L = (100.0 / 22.13) ** m
+    return L * S
 
 
 def _concern_level(rusle_score: float) -> str:
@@ -292,14 +306,7 @@ def pixel_risk_index(
     c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
     c_array = c_array * residue_multiplier
 
-    ls_array = np.full(slope_array.shape, np.nan, dtype=float)
-    ls_array = np.where(slope_array < 2,                                      0.2,  ls_array)
-    ls_array = np.where((slope_array >= 2)  & (slope_array < 4),              0.5,  ls_array)
-    ls_array = np.where((slope_array >= 4)  & (slope_array < 6),              1.0,  ls_array)
-    ls_array = np.where((slope_array >= 6)  & (slope_array < 9),              1.8,  ls_array)
-    ls_array = np.where((slope_array >= 9)  & (slope_array < 12),             2.8,  ls_array)
-    ls_array = np.where((slope_array >= 12) & (slope_array < 20),             4.5,  ls_array)
-    ls_array = np.where(slope_array >= 20,                                    7.0,  ls_array)
+    ls_array = _analytical_ls_factor(slope_array)
 
     risk_array = c_array * ls_array
     risk_array = np.where(
@@ -506,11 +513,14 @@ def pixel_level_concern(
     Apply RUSLE C×LS scoring at every pixel for map visualization.
     Returns a float array of rusle_score values (same shape as inputs).
     """
-    rusle = np.full(ndvi_array.shape, np.nan)
-    for (ndvi_min, ndvi_max), c in IOWA_C_FACTOR_TABLE.items():
-        mask = (ndvi_array >= ndvi_min) & (ndvi_array < ndvi_max)
-        for (s_min, s_max), ls in LS_FACTOR_TABLE.items():
-            slope_mask = (slope_array >= s_min) & (slope_array < s_max)
-            combined = mask & slope_mask
-            rusle[combined] = c * ls
+    c_array = np.full(ndvi_array.shape, np.nan, dtype=float)
+    c_array = np.where(ndvi_array < 0.15,                                    0.90, c_array)
+    c_array = np.where((ndvi_array >= 0.15) & (ndvi_array < 0.20),           0.75, c_array)
+    c_array = np.where((ndvi_array >= 0.20) & (ndvi_array < 0.35),           0.45, c_array)
+    c_array = np.where((ndvi_array >= 0.35) & (ndvi_array < 0.50),           0.20, c_array)
+    c_array = np.where((ndvi_array >= 0.50) & (ndvi_array < 0.65),           0.08, c_array)
+    c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
+    ls_array = _analytical_ls_factor(slope_array)
+    rusle = c_array * ls_array
+    rusle = np.where(np.isnan(ndvi_array) | np.isnan(slope_array), np.nan, rusle)
     return rusle
