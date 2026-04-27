@@ -849,7 +849,7 @@ st.caption(
 )
 
 # === SECTION 5: COVER CROP METRICS ===
-st.subheader("📊 Cover Crop Metrics")
+st.subheader("📊 Field Level Results")
 _soil_series = st.session_state.get("soil_series", "—") or "—"
 _soil_kf     = st.session_state.get("soil_k_factor")
 c1, c2, c3, c4, c5, c6, c7 = st.columns(7)

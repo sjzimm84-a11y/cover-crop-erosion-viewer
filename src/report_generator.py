@@ -756,7 +756,7 @@ def generate_field_report(
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
                             color=MID_GRAY, spaceAfter=4))
-    story.append(Paragraph("Cover Crop Metrics", section_style))
+    story.append(Paragraph("Field Level Results", section_style))
 
     _c_adj   = risk_result.get("c_factor", 0)
     _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
