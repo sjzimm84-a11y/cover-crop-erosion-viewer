@@ -27,9 +27,20 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
         geom = unified
     else:
         geom = unified.convex_hull
+    # Extract coordinates and ensure polygon closure
     coords = list(geom.exterior.coords)
-    coord_str = ",".join([f"{x} {y}" for x, y in coords])
+    # SSURGO requires closed polygon (first = last coordinate)
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+
+    # Create WKT with explicit lon,lat ordering
+    coord_str = ",".join([f"{coord[0]} {coord[1]}" for coord in coords])
     wkt_polygon = f"POLYGON(({coord_str}))"
+
+    # Debug output
+    print(f"DEBUG: Polygon coords: {len(coords)} points")
+    print(f"DEBUG: First coord: {coords[0]}, Last coord: {coords[-1]}")
+    print(f"DEBUG: WKT sample: {wkt_polygon[:100]}...")
 
     simple_query = f"""SELECT TOP 1
         mu.muname, c.compname, c.comppct_r,
