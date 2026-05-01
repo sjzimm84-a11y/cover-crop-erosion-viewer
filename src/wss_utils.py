@@ -18,10 +18,12 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     Returns dict with keys: series_name, k_factor, map_unit_name, pct_of_aoi
     """
     boundary_ll = boundary_gdf.to_crs("EPSG:4326")
-    unified = boundary_ll.geometry.unary_union
-    if isinstance(unified, MultiPolygon):
+    # Safe MultiPolygon extraction — GeoJSON fix
+    from shapely.ops import unary_union
+    unified = unary_union(boundary_ll.geometry)
+    if unified.geom_type == "MultiPolygon":
         geom = max(unified.geoms, key=lambda g: g.area)
-    elif isinstance(unified, Polygon):
+    elif unified.geom_type == "Polygon":
         geom = unified
     else:
         geom = unified.convex_hull
