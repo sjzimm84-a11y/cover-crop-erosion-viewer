@@ -27,8 +27,21 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
         geom = unified
     else:
         geom = unified.convex_hull
+    # Simplify geometry to reduce SSURGO query complexity
+    # 0.0001 degrees ≈ 10m tolerance at Iowa latitude - appropriate for soil mapping
+    simplified_geom = geom.simplify(0.0001, preserve_topology=True)
+
+    # Fallback if simplification fails
+    if simplified_geom.is_empty or not simplified_geom.is_valid:
+        print("DEBUG: Simplification failed, using original geometry")
+        simplified_geom = geom
+    else:
+        orig_vertices = len(list(geom.exterior.coords))
+        new_vertices = len(list(simplified_geom.exterior.coords))
+        print(f"DEBUG: Geometry simplified: {orig_vertices} → {new_vertices} vertices ({100*(orig_vertices-new_vertices)/orig_vertices:.1f}% reduction)")
+
     # Extract coordinates and ensure polygon closure
-    coords = list(geom.exterior.coords)
+    coords = list(simplified_geom.exterior.coords)
     # SSURGO requires closed polygon (first = last coordinate)
     if coords[0] != coords[-1]:
         coords.append(coords[0])
@@ -57,6 +70,9 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     AND c.majcompflag = 'Yes'
     ORDER BY c.comppct_r DESC"""
 
+    print(f"DEBUG: About to call SSURGO API...")
+    print(f"DEBUG: Query length: {len(simple_query)} chars")
+
     try:
         resp = requests.post(
             "https://SDMDataAccess.nrcs.usda.gov/Tabular/post.rest",
@@ -67,9 +83,18 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
             },
             timeout=15,
         )
+        print(f"DEBUG: SSURGO API status: {resp.status_code}")
+        print(f"DEBUG: Response length: {len(resp.text)} chars")
+
         if resp.status_code == 200:
             data = resp.json()
+            print(f"DEBUG: JSON keys: {list(data.keys())}")
             rows = data.get("Table", [])
+            print(f"DEBUG: Row count: {len(rows)}")
+            if rows:
+                print(f"DEBUG: First row (headers): {rows[0] if len(rows) > 0 else 'None'}")
+                print(f"DEBUG: Second row (data): {rows[1] if len(rows) > 1 else 'None'}")
+
             if rows and len(rows) > 1:
                 row = rows[1]  # row 0 is column headers
                 return {
@@ -78,8 +103,9 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
                     "pct_of_aoi":    row[2] or 0,
                     "k_factor":      row[3] or "N/A",
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"DEBUG: SSURGO API Exception: {type(e).__name__}: {e}")
+        print(f"DEBUG: Query that failed: {simple_query[:200]}...")
 
     return {
         "series_name":   "Not available",
