@@ -893,7 +893,7 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
     _tv = _sl_result["t_value"]
     _rt = _sl_result["ratio_to_t"]
     _sc = _sl_result["status_code"]
-    sl1, sl2, sl3 = st.columns(3)
+    sl1, sl2, sl3, sl4 = st.columns(4)
     sl1.metric(
         "Est. Soil Loss",
         f"{_sl:.1f} t/ac/yr",
@@ -910,6 +910,32 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
         delta="Within T" if _sc == "within_t" else "Over T",
         delta_color="normal" if _sc == "within_t" else "inverse",
     )
+    _c_adj      = risk_result.get("c_factor", 0)
+    _res_mult   = risk_result.get("residue_multiplier", 1.0)
+    _c_baseline = 0.90 * _res_mult
+    if _c_adj > 0 and _c_baseline > _c_adj:
+        _a_baseline    = _sl * (_c_baseline / _c_adj)
+        _pct_reduction = (_c_baseline - _c_adj) / _c_baseline * 100
+        _a_saved       = _a_baseline - _sl
+        sl4.metric(
+            "Est. Cover Crop Erosion Reduction",
+            f"{_pct_reduction:.0f}%",
+            help=(
+                f"Estimated erosion reduction attributable to cover crop canopy. "
+                f"Baseline: {_a_baseline:.1f} t/ac/yr (same tillage, no cover). "
+                f"Saved: {_a_saved:.1f} t/ac/yr. "
+                f"Reduction = (C_baseline − C_adjusted) / C_baseline. "
+                f"R, K, LS held constant. ±10 pt uncertainty until residue multipliers are RUSLE2-validated."
+            ),
+        )
+        st.caption(
+            f"Cover crop baseline: {_a_baseline:.1f} t/ac/yr → with cover: {_sl:.1f} t/ac/yr "
+            f"(saved {_a_saved:.1f} t/ac/yr). "
+            f"C_baseline = 0.90 × residue multiplier ({_res_mult:.3f}) = {_c_baseline:.3f}."
+        )
+    else:
+        sl4.metric("Est. Cover Crop Erosion Reduction", "N/A",
+                   help="Cannot compute — C-factor at or above no-cover baseline.")
     _status_fn = {
         "within_t":   st.success,
         "near_t":     st.warning,

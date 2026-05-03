@@ -850,6 +850,45 @@ def generate_field_report(
             ("LEFTPADDING",   (0, 0), (-1, -1), 6),
         ]))
         story.append(sl_table)
+        _c_adj_r    = soil_loss_result.get("c_factor", risk_result.get("c_factor", 0))
+        _res_mult_r = risk_result.get("residue_multiplier", 1.0)
+        _c_base_r   = 0.90 * _res_mult_r
+        if _c_adj_r > 0 and _c_base_r > _c_adj_r:
+            _a_base_r    = _sl * (_c_base_r / _c_adj_r)
+            _pct_r       = (_c_base_r - _c_adj_r) / _c_base_r * 100
+            _a_saved_r   = _a_base_r - _sl
+            cc_red_data = [
+                ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", "Saved"],
+                [
+                    f"{_pct_r:.0f}% reduction",
+                    f"{_a_base_r:.1f} t/ac/yr",
+                    f"{_a_saved_r:.1f} t/ac/yr",
+                ],
+            ]
+            cc_red_table = Table(
+                cc_red_data,
+                colWidths=[2.5 * inch, 2.0 * inch, 2.5 * inch],
+            )
+            cc_red_table.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+                ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+                ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+                ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME",      (0, 1), (0, 1),   "Helvetica-Bold"),
+                ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+            ]))
+            story.append(Spacer(1, 4))
+            story.append(cc_red_table)
+            story.append(Paragraph(
+                f"<i>Cover crop reduction: C_baseline ({_c_base_r:.3f}) = 0.90 × residue multiplier ({_res_mult_r:.3f}). "
+                f"R, K, LS held constant. Estimate ±10 percentage points pending RUSLE2 residue multiplier validation.</i>",
+                small_style,
+            ))
         _r_note = r_factor_note or f"R={r_factor:.0f} (Iowa erosivity index)"
         story.append(Paragraph(
             f"<i>Iowa R-factor: {_r_note} | "
