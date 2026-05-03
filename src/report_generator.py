@@ -1493,6 +1493,53 @@ def generate_producer_report(
     story.append(met_table)
     story.append(Spacer(1, 8))
 
+    # --- Cover Crop Erosion Reduction ---
+    _sl_p = (
+        soil_loss_result.get("soil_loss_tons_ac_yr", 0)
+        if soil_loss_result and soil_loss_result.get("status_code") != "unavailable"
+        else None
+    )
+    _c_adj_p    = risk_result.get("c_factor", 0)
+    _res_mult_p = risk_result.get("residue_multiplier", 1.0)
+    _c_base_p   = 0.90 * _res_mult_p
+    if _sl_p is not None and _c_adj_p > 0 and _c_base_p > _c_adj_p:
+        _a_base_p  = _sl_p * (_c_base_p / _c_adj_p)
+        _pct_p     = (_c_base_p - _c_adj_p) / _c_base_p * 100
+        _a_saved_p = _a_base_p - _sl_p
+        cc_red_p = [
+            ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", "Saved"],
+            [
+                f"{_pct_p:.0f}% reduction",
+                f"{_a_base_p:.1f} t/ac/yr",
+                f"{_a_saved_p:.1f} t/ac/yr",
+            ],
+        ]
+        cc_red_table_p = Table(
+            cc_red_p,
+            colWidths=[2.5 * inch, 2.0 * inch, 2.5 * inch],
+        )
+        cc_red_table_p.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("FONTNAME",      (0, 1), (0, 1),   "Helvetica-Bold"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ]))
+        story.append(cc_red_table_p)
+        story.append(Paragraph(
+            f"<i>Cover crop reduction vs. same-tillage, no-cover baseline. "
+            f"C_baseline = 0.90 × residue multiplier ({_res_mult_p:.3f}) = {_c_base_p:.3f}. "
+            f"R, K, LS held constant. ±10 pt uncertainty pending RUSLE2 validation.</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 8))
+
     # -----------------------------------------------------------------------
     # FOOTER
     # -----------------------------------------------------------------------
