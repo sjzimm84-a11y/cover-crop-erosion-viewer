@@ -1,0 +1,562 @@
+﻿0000: CoverMap
+0001: Technical Methods Guide
+0002: Inputs · Equations · Outputs · Definitions · Limitations
+0003: Stephen Zimmerman, CCA MS  |  Ankeny, Iowa  |  Spring 2026  |  v1.6  |  Pending ISU Extension Review
+0004: Purpose  CoverMap combines Sentinel-2 satellite NDVI with the Iowa 3-meter DEM to produce field-scale cover crop stand assessments and simplified erosion risk estimates for Iowa CCAs and NRCS advisors. This document describes every method, input, equation, and output in the CoverMap pipeline so that any agronomist, NRCS conservationist, or ISU Extension reviewer can evaluate the scientific basis of each output. Known limitations and planned improvements are explicitly documented throughout.
+0005: 1. Complete Data Pipeline Overview
+0006: CoverMap processes five input streams through three computational layers to produce seven distinct outputs. The pipeline below shows the complete data flow from satellite image acquisition through final PDF report generation.
+0007: Figure 1. CoverMap complete data pipeline — inputs, processing layers, and outputs.
+0008: Layer
+0009: Input
+0010: Process
+0011: Output
+0012: Input
+0013: Sentinel-2 L2A (GEE)
+0014: NDVI computation, cloud filter, temporal median
+0015: NDVI raster 10m
+0016: Input
+0017: Iowa DNR 3m DEM (WCS)
+0018: Slope percent computation per pixel
+0019: Slope raster 3m
+0020: Input
+0021: SSURGO WSS API
+0022: Dominant soil K-factor lookup
+0023: K-factor, soil series
+0024: Input
+0025: FCC Census Block API
+0026: County R-factor zone lookup
+0027: R-factor (175 or 150)
+0028: Input
+0029: CCA / Operator
+0030: Field boundary upload, residue system selection
+0031: GeoJSON polygon
+0032: Compute
+0033: NDVI + Residue system
+0034: C-factor lookup + residue multiplier
+0035: C-factor adjusted
+0036: Compute
+0037: DEM + Slope
+0038: LS-factor lookup (simplified, no slope length)
+0039: LS-factor per pixel
+0040: Compute
+0041: C-factor + LS-factor
+0042: Risk Index = C × LS per pixel; field concern level
+0043: Risk Index map
+0044: Compute
+0045: R, K, LS, C, P=1.0
+0046: RUSLE A = R × K × LS × C; compare to T-value
+0047: Soil loss (t/ac/yr)
+0048: Output
+0049: All above
+0050: Zone summaries, EQIP checklist, PDF/CSV/SHP export
+0051: 2-page PDF report + SHP
+0052: 1.1 Plain-Language Risk Zone Summary
+0053: The diagram below shows how CoverMap combines the two primary inputs—cover crop thickness and slope steepness—to assign each 10m × 10m pixel on a field its erosion risk zone. This figure is intended for producer-facing presentations and field consultations.
+0054: Figure 1.1. How the erosion risk zone is determined. Each pixel’s risk color is computed by multiplying the satellite-derived C-factor (from NDVI) by the CCA-selected residue multiplier and the terrain LS-factor (from slope). Risk Index = C × Residue × LS.
+0055: [Risk Zone Diagram - Figure 1.1]
+0056: 2. Normalized Difference Vegetation Index (NDVI)
+0057: 2.1 Data Source and Collection
+0058: Parameter
+0059: Value / Method
+0060: Notes
+0061: Satellite
+0062: Sentinel-2A and Sentinel-2B (ESA / Copernicus)
+0063: Two-satellite constellation
+0064: GEE Collection
+0065: COPERNICUS/S2_SR_HARMONIZED — Level-2A Surface Reflectance
+0066: Atmospherically corrected
+0067: Native resolution
+0068: 10 meters per pixel (bands B04 and B08)
+0069: Revisit frequency
+0070: 3–5 days over Iowa
+0071: Two-satellite constellation
+0072: Date window
+0073: User-specified or rolling window. Minimum 7 days recommended
+0074: Iowa spring conditions
+0075: Cloud filter — Stage 1
+0076: Scene-level: CLOUDY_PIXEL_PERCENTAGE < 80%
+0077: Scenes above threshold excluded
+0078: Cloud filter — Stage 2
+0079: Field-level SCL classes 3, 8, 9, 10 within boundary. Scenes with >30% cloud/shadow excluded
+0080: Compositing method
+0081: Pixel-wise temporal median across all scenes passing both cloud filters
+0082: Consistent with USDA CDL, NASA MODIS, ESA seasonal products
+0083: 2.2 NDVI Equation
+0084: NDVI = (B08 − B04) / (B08 + B04)
+0085: B08 = Near-infrared band (842nm)    │    B04 = Red band (665nm)
+0086: Term
+0087: Definition
+0088: Typical Iowa range (spring)
+0089: B08
+0090: Near-infrared reflectance. Healthy vegetation reflects strongly in NIR due to cell structure
+0091: 0.3–0.6 for actively growing cereal rye
+0092: B04
+0093: Red reflectance. Chlorophyll absorbs red light — low values indicate healthy vegetation
+0094: 0.05–0.15 for cereal rye in active growth
+0095: NDVI
+0096: Dimensionless index -1.0 to 1.0. Higher = more living vegetation
+0097: 0.10–0.45 for Iowa spring cereal rye (March–May)
+0098: 2.3 Valid Pixel Definition and Quality Rules
+0099: Valid pixels are defined as NDVI > 0.05 within the field boundary polygon after applying the rasterio geometry_mask. GEE returns a bounding box rectangle — CoverMap applies the geometry mask immediately after fetch, setting outside pixels to NaN before any computation. Scenes with <50% valid pixels trigger a reliability warning. Scenes with <75% valid pixels trigger a quality advisory.
+0100: Figure 2. NDVI zone thresholds (left) and multi-scene cloud shadow rejection (right).
+0101: Rule
+0102: Threshold
+0103: Action if failed
+0104: Valid pixel
+0105: NDVI > 0.05
+0106: Pixels ≤ 0.05 are water, cloud shadow, or saturated bare soil — excluded from all statistics
+0107: Minimum valid fraction
+0108: ≥ 75% of field pixels
+0109: Yellow warning displayed. Results may be cloud-contaminated
+0110: Critical valid fraction
+0111: ≥ 50% of field pixels
+0112: Red warning — results flagged unreliable. Widen date range
+0113: Single-scene warning
+0114: Scene count = 1
+0115: Warning: cloud contamination risk elevated. Median compositing cannot filter cloud shadows from single scene
+0116: Negative NDVI mean
+0117: Mean NDVI < -0.05
+0118: Error raised — physically impossible for vegetation. Indicates complete cloud shadow contamination
+0119: Saturation warning
+0120: Mean NDVI > 0.75
+0121: Warning: likely mature cash crop not cover crop. Verify image date
+0122: 2.4 NDVI Zone Classification
+0123: NDVI values are classified into three cover quality zones. The threshold is user-adjustable via sidebar slider (default 0.20). Zone labels update dynamically based on the selected threshold.
+0124: Zone
+0125: NDVI Range
+0126: Estimated biomass (national rye database)
+0127: Map color
+0128: Agronomic meaning
+0129: Low Cover
+0130: < 0.20
+0131: < 900 lb/acre
+0132: Orange #F97316
+0133: Below erosion protection threshold
+0134: Marginal
+0135: 0.20 – 0.35
+0136: 900–2,200 lb/acre
+0137: Steel blue #38BDF8
+0138: Partial protection, variable coverage
+0139: Good Cover
+0140: > 0.35
+0141: > 2,200 lb/acre
+0142: Yellow #FACC15
+0143: Adequate for Iowa spring conditions
+0144: Known limitation: NDVI saturates above approximately 3,500 kg/ha (~3,100 lb/acre — national cereal rye database mean). CoverMap cannot differentiate between good and excellent stands above this threshold. The same NDVI value in March (dormant rye) means something different than in May (active growth). No growing degree day adjustment is currently applied.
+0145: 3. Digital Elevation Model and Slope Computation
+0146: CoverMap auto-fetches the Iowa 3m Digital Elevation Model from the Iowa Geospatial Data Clearinghouse via WCS API. The DEM is buffered 50m beyond the field boundary to ensure accurate edge slope computation.
+0147: 3.1 Data Source
+0148: Parameter
+0149: Value / Method
+0150: Source
+0151: Iowa 3-meter Digital Elevation Model — Iowa Department of Natural Resources
+0152: Access method
+0153: ArcGIS ImageServer REST API: programs.iowadnr.gov/geospatial/rest/services/Elevation/DEM_3M_I/ImageServer/exportImage
+0154: Native resolution
+0155: 3 meters per pixel — highest resolution publicly available statewide DEM in Iowa
+0156: Native units
+0157: UInt16 integer — elevation stored in centimeters. CoverMap auto-detects (mean elevation > 10,000 = centimeters) and converts to float32 meters before slope computation
+0158: CRS
+0159: EPSG:26915 — NAD83 / UTM Zone 15N (meters). Slope is computed in this CRS before reprojection to EPSG:4326 to prevent degree-unit artifacts
+0160: Coverage
+0161: Statewide Iowa. Fields outside Iowa require manual DEM upload
+0162: 3.2 Slope Computation Equation
+0163: Slope is computed per pixel using numpy gradient in percent (rise/run × 100). The DEM is delivered in meters (native Iowa DNR format). Slope percent is computed as: slope_pct = sqrt(dz/dx² + dz/dy²) × 100, where dz/dx and dz/dy are the horizontal and vertical gradient components at 3m resolution.
+0164: slope_pct = sqrt((dz/dx)² + (dz/dy)²) × 100
+0165: Computed using numpy.gradient in UTM meters (EPSG:26915) before CRS reprojection
+0166: Known limitation: CoverMap resamples the 3m slope grid to match the 10m NDVI grid for per-pixel Risk Index computation. Slope values represent the mean slope within each 10m pixel. Micro-topographic variation at sub-10m scale is not captured.
+0167: 4. Soil Data — USDA SSURGO Web Soil Survey
+0168: 4.1 Data Source and Query Method
+0169: Parameter
+0170: Value / Method
+0171: Source
+0172: SSURGO — Soil Survey Geographic Database, USDA-NRCS. Contains century-scale field-validated soil mapping
+0173: API endpoint
+0174: Soil Data Access REST: SDMDataAccess.nrcs.usda.gov/Tabular/post.rest — free, no authentication
+0175: Spatial query function
+0176: SDA_Get_Mukey_from_intersection_with_WktWgs84(polygon_wkt) — returns all map unit keys intersecting field boundary polygon in WGS84
+0177: Data returned
+0178: Dominant component (majcompflag = Yes, highest comppct_r): map unit name, soil series name, K-factor (kwfact from top horizon hzdept_r = 0)
+0179: K-factor field
+0180: kwfact — whole-soil K-factor, dimensionless (0.10–0.64). Represents soil erodibility under standard unit plot conditions
+0181: T-value lookup
+0182: Hardcoded by soil series name in IOWA_T_VALUES dictionary. Monona = 5, Ida = 4, all others default = 5 tons/acre/year
+0183: Known limitation: The WSS query returns only the dominant component by percentage — it does not return all soil series within the field boundary. A 105-acre Shelby County field with Monona (65%), Judson (20%), and Ida (7%) returns only Monona. This K-factor is applied uniformly across all pixels for the soil loss estimate, which understates risk on steeper Ida slope units.
+0184: 4.2 Iowa R-Factor — Two-Zone Lookup
+0185: Iowa NRCS recognizes two R-factor zones per Iowa FOTG Section I Figure 2 (Updated September 2002). CoverMap automatically determines the zone from the field centroid using the FCC Area API (geo.fcc.gov/api/census/block/find). R=175 is the default for the majority of Iowa. R=150 applies only to approximately 34 northwest Iowa counties. Shelby County is R=175.
+0186: Zone
+0187: R-Factor
+0188: Iowa counties
+0189: Northwest Iowa only
+0190: 150
+0191: Lyon, Osceola, Dickinson, Emmet, Kossuth, Winnebago, Worth, Mitchell, Howard, Winneshiek, Sioux, O’Brien, Clay, Palo Alto, Hancock, Cerro Gordo, Floyd, Chickasaw, Plymouth, Cherokee, Buena Vista, Pocahontas, Humboldt, Wright, Franklin, Butler, Woodbury, Ida, Sac, Calhoun, Webster, Hamilton, Monona, Crawford (~34 counties)
+0192: Remainder of Iowa (DEFAULT)
+0193: 175
+0194: All other Iowa counties — includes Shelby, Pottawattamie, Harrison, Audubon, Carroll, and all central, east, and south Iowa counties. Majority of Iowa row crop acreage. Shelby County = R=175.
+0195: Source: Iowa NRCS FOTG Section I — USLE Erosion Prediction, Figure 2 (Rainfall Factors), Updated Electronically September 2002. R=175 reflects greater storm intensity from Gulf of Mexico moisture in central and eastern Iowa. CoverMap defaults to R=175 if county lookup fails — conservative for most Iowa fields. For formal conservation planning use the NRCS RUSLE2 Iowa State File which has location-specific values.
+0196: 5. C-Factor — Cover-Management Factor
+0197: 5.1 Iowa NDVI to C-Factor Lookup Table
+0198: The C-factor represents the effect of vegetation and management on erosion relative to a standard bare fallow plot. CoverMap derives C-factor from field-mean NDVI using a lookup table calibrated to Iowa cereal rye biomass thresholds.
+0199: Figure 3. NDVI → C-factor lookup (left) and residue adjustment multipliers (right).
+0200: NDVI Range
+0201: C-Factor
+0202: Biomass estimate
+0203: Stand quality
+0204: Reference
+0205: 0.00–0.15
+0206: 0.90
+0207: < 450 lb/acre
+0208: Failed / bare
+0209: Near bare-soil erosion rate per Laflen & Roose 1998
+0210: 0.15–0.20
+0211: 0.75
+0212: 450–900 lb/acre
+0213: Inadequate
+0214: Below erosion protection threshold, ISU Extension Cover Crops ICM
+0215: 0.20–0.35
+0216: 0.45
+0217: 900–2,200 lb/acre
+0218: Marginal
+0219: National cereal rye database median ~2,458 kg/ha
+0220: 0.35–0.50
+0221: 0.20
+0222: 2,200–3,100 lb/acre
+0223: Adequate
+0224: Research-based erosion protection benchmark
+0225: 0.50–0.65
+0226: 0.08
+0227: 3,100–4,000 lb/acre
+0228: Good
+0229: Strong canopy development, high biomass
+0230: 0.65–1.00
+0231: 0.03
+0232: > 4,000 lb/acre
+0233: Excellent
+0234: Near NDVI saturation — cannot differentiate above this
+0235: References: Laflen & Roose (1998); Iowa NRCS Technical Note Agronomy-4; ISU Extension Cover Crops ICM; Huddell et al. (2024) national cereal rye database (n=5,695 observations, mean 3,428 kg/ha).
+0236: 5.2 Residue Adjustment — CCA Input
+0237: C_adjusted = C_NDVI × residue_multiplier
+0238: Applied per-pixel before Risk Index computation
+0239: Satellite NDVI measures living vegetation biomass but cannot detect crop residue on the soil surface. A no-till corn field with 80% residue cover has substantially lower effective C-factor than a conventionally tilled field with the same NDVI. The CCA selects the previous crop and tillage system from a dropdown; CoverMap applies a validated adjustment multiplier.
+0240: Residue System
+0241: Multiplier
+0242: Rationale
+0243: Effective C (NDVI=0.18)
+0244: No-till corn (~80% residue)
+0245: × 0.30
+0246: Corn stover at 80% cover provides C=0.10–0.15 independently. ISU Extension PM-1901
+0247: 0.225
+0248: No-till soybeans (~60% residue)
+0249: × 0.55
+0250: Soybean residue fragile — deteriorates rapidly over Iowa winter. Much less available by spring.
+0251: 0.413
+0252: Conservation tillage (>30% residue)
+0253: × 0.75
+0254: Chisel plow/vertical till typically leaves 35–70% residue. NRCS conservation tillage definition.
+0255: 0.563
+0256: Conventional tillage (<30% residue)
+0257: × 1.00
+0258: Moldboard plow leaves 0–15% residue. Near bare-soil baseline. NDVI C-factor applies directly.
+0259: 0.750
+0260: Unknown — not recorded (default)
+0261: × 1.00
+0262: Conservative default — assumes no residue benefit. Errs toward overstating risk, not understating it.
+0263: 0.750
+0264: ⚠️ VALIDATION REQUIRED: Residue multipliers are agronomically-derived estimates based on literature residue cover percentages and CCA professional judgment. They have not been validated against RUSLE2 Iowa State File runs for each scenario. Planned validation: compare CoverMap adjusted C-factors against RUSLE2 outputs for 6–8 Iowa field scenarios using Monona silt loam K=0.37. Contact: ISU Extension Agronomy for RUSLE2 Iowa State File access.
+0265: 6. LS-Factor and Risk Index (C×LS)
+0266: 6.1 LS-Factor — Simplified Lookup from Slope
+0267: The LS-factor combines slope length (L) and slope steepness (S) effects on erosion. True RUSLE2 LS-factor requires flow accumulation analysis to determine slope length. CoverMap uses a simplified per-pixel lookup from slope percent only — slope length is not computed.
+0268: Figure 4 (existing). Slope% → LS-factor lookup (left) and Risk Index zone classification (right).
+0269: θ = arctan(slope_pct / 100)
+0270: S = 10.8 × sin(θ) + 0.03          [slope < 9%]
+0271: S = 16.8 × sin(θ) − 0.50          [slope ≥ 9%]
+0272: L = (100.0 / 22.13) ^ m
+0273: LS = L × S                          [per pixel, numpy vectorized]
+0274: Term
+0275: Value / Source
+0276: Definition
+0277: θ
+0278: arctan(slope_pct / 100)
+0279: Slope angle in radians. Derived from per-pixel slope% computed from Iowa 3m DEM.
+0280: S
+0281: Continuous function of θ
+0282: Slope steepness factor. McCool et al. (1987) piecewise formula: lower equation for slopes < 9%, upper equation for slopes ≥ 9%. Floor = 0.03 to prevent zero values on flat ground.
+0283: L
+0284: (100.0 / 22.13) ^ m
+0285: Slope length factor. Assumed slope length λ = 100m — consistent with the ~90–110m implied by the previous lookup table (back-calculated). Unit plot reference length = 22.13m.
+0286: m
+0287: 0.5 (slope ≥5%), 0.4 (3–5%), 0.3 (1–3%), 0.2 (<1%)
+0288: Slope-length exponent. Varies with slope class per RUSLE convention. Applied per pixel.
+0289: LS
+0290: Unitless
+0291: Combined length-steepness factor. Continuous and spatially explicit — every pixel receives its own LS value from its exact slope%.
+0292: Known limitation — slope length not computed: CoverMap uses simplified per-pixel slope lookup for the Risk Index map. For the RUSLE soil loss estimate, a single field-mean slope drives a single LS value. In both cases, slope length is not computed — true RUSLE2 LS requires the horizontal distance from flow origin to concentration point. This is appropriate for field advisory use but not for formal NRCS conservation planning.
+0293: 6.2 Risk Index — Pixel-Level C×LS Computation
+0294: Risk Index (per pixel) = C_adjusted × LS
+0295: Unitless composite erosion vulnerability score. Computed at 10m resolution across entire field.
+0296: Both C-factor and LS-factor are computed at every pixel. The Risk Index array is then classified into four zones. This is the key improvement over field-mean approaches — steep backslopes get high Risk Index values even when the field-wide average is moderate.
+0297: Risk Index
+0298: Zone
+0299: Map color
+0300: Agronomic meaning
+0301: Recommendation text
+0302: < 0.3
+0303: Low Risk
+0304: #22C55E green
+0305: Cover adequate for slope conditions
+0306: Cover crop establishment adequate for slope conditions. Canopy development appears sufficient to reduce erosion risk based on NDVI analysis.
+0307: 0.3–0.7
+0308: Moderate Risk
+0309: #FACC15 yellow
+0310: Variable cover on slope positions
+0311: Cover crop stand is variable across slope positions based on NDVI analysis. Erosion risk increases on steeper units during spring rainfall events.
+0312: 0.7–1.5
+0313: High Risk
+0314: #F97316 orange
+0315: Marginal cover on steeper terrain
+0316: Cover crop establishment is marginal on identified slope areas. Erosion protection is likely insufficient on steeper terrain units based on NDVI analysis.
+0317: > 1.5
+0318: Critical Risk
+0319: #EF4444 red
+0320: Low cover on high-risk slope units
+0321: Satellite imagery indicates low cover crop establishment on high-risk slope units. Stand density appears below effective erosion protection thresholds for this terrain based on NDVI analysis.
+0322: 6.3 Field-Level Concern Level — From Zone Distribution
+0323: The field-level concern level (used in the CoverMap Advisory and report header) is determined from the pixel distribution of Risk Index zones. This approach is more meaningful than a field-mean Risk Index because it captures the area of the field that is truly at highest risk. Logic is applied in priority order — the first condition met determines the level.
+0324: Concern Level
+0325: Pixel distribution trigger
+0326: Working definition
+0327: Critical
+0328: ≥20% of valid field pixels in Critical zone (C×LS > 1.5)
+0329: Critical erosion risk dominant across significant field area. Inadequate cover on high-risk slope units.
+0330: High
+0331: ≥5% of pixels Critical, OR >40% of pixels in combined High/Critical zones
+0332: Substantial erosion risk. More than 40% of field has marginal or failed cover on moderate-to-steep slopes.
+0333: Moderate
+0334: 20–40% of pixels in combined High/Critical zones AND Critical pixels <5%
+0335: Variable cover across slope positions. Erosion risk elevated on steeper units but not dominant field condition.
+0336: Low
+0337: ≥80% of valid pixels in Low/Moderate zones AND Critical pixels <5%
+0338: Cover adequate for slope conditions. Canopy development appears sufficient across the majority of field pixels.
+0339: Priority order: (1) Critical fires if ≥20% Critical pixels. (2) High fires if ≥5% Critical OR >40% combined High/Critical. (3) Moderate fires if 20–40% combined High/Critical AND Critical <5%. (4) Low applies to all remaining fields.
+0340: 7. Simplified RUSLE — Estimated Soil Loss
+0341: 7.1 RUSLE Equation and Factor Sources
+0342: Figure 5. RUSLE factors (top), T-value comparison zones (middle), and Iowa example (bottom).
+0343: A = R × K × LS × C × P
+0344: A = estimated annual soil loss (tons/acre/year)    │    P = 1.0 assumed (no practice factor)
+0345: Factor
+0346: Name
+0347: CoverMap source
+0348: Value / range
+0349: Limitation
+0350: A
+0351: Annual soil loss (t/ac/yr)
+0352: Computed output
+0353: Varies by field
+0354: Field-average — see Section 7.3
+0355: R
+0356: Rainfall erosivity
+0357: FCC API → Iowa FOTG 2-zone lookup
+0358: 175 (standard Iowa default); 150 (NW Iowa — 34 counties)
+0359: County-level precision only. Fallback = 175 (conservative)
+0360: K
+0361: Soil erodibility
+0362: SSURGO WSS API — kwfact, top horizon
+0363: 0.28–0.37 (Shelby Co. typical)
+0364: Dominant component only — single value per field
+0365: LS
+0366: Slope length-steepness
+0367: Analytical S-factor formula (McCool et al. 1987), 100m assumed slope length
+0368: Continuous — varies with exact pixel slope%
+0369: No flow-accumulation slope length — see Section 6.1
+0370: C
+0371: Cover-management
+0372: NDVI lookup + residue multiplier
+0373: 0.03–0.90
+0374: Multipliers need RUSLE2 validation
+0375: P
+0376: Support practices
+0377: Assumed P = 1.0 (none)
+0378: 1.0 (fixed)
+0379: Terraced fields require P < 1.0
+0380: 7.2 T-Value Comparison
+0381: Estimated soil loss A is compared to the tolerable soil loss T for the dominant soil series. T is the maximum average annual erosion rate a soil can sustain indefinitely without long-term productivity loss. T is retrieved from SSURGO or looked up in the IOWA_T_VALUES dictionary by soil series name.
+0382: Ratio A/T
+0383: Conservation status
+0384: Meaning
+0385: A ≤ T
+0386: Within tolerable limit
+0387: Current management is maintaining soil within long-term sustainable loss rate
+0388: T < A ≤ 2T
+0389: Near tolerable limit
+0390: Conservation system review recommended — approaching threshold
+0391: 2T < A ≤ 5T
+0392: Exceeds tolerable limit
+0393: Conservation system needed per NRCS planning criteria. Soil loss is 2–5× the sustainable rate
+0394: A > 5T
+0395: Significantly exceeds limit
+0396: Priority conservation treatment indicated. Soil loss is more than 5× the sustainable rate
+0397: 7.3 How CoverMap Differs from RUSLE2 — Critical Distinction
+0398: This is the most important limitation for NRCS and ISU audiences to understand.
+0399: Dimension
+0400: RUSLE2
+0401: CoverMap
+0402: Computational unit
+0403: Single hillslope profile — a line from water origin to concentration point
+0404: Field average across all pixels including flat bottomland
+0405: Area selected
+0406: Dominant critical area — the steepest 25–33% of field (per Iowa Agronomy Technical Note 29)
+0407: Mean of entire field — flat areas dilute the risk estimate
+0408: Slope length (L)
+0409: Measured or estimated from topographic survey or DEM flow accumulation
+0410: Assumed 100m — continuous S-factor applied per pixel (v1.5)
+0411: C-factor
+0412: Computed daily through crop stage periods with detailed residue sub-factors
+0413: Single NDVI observation with four-category residue multiplier
+0414: Deposition
+0415: Explicitly computed on concave toeslopes — sediment that deposits before leaving field is credited
+0416: Not computed — all detached sediment assumed to leave field
+0417: Expected relationship
+0418: RUSLE2 evaluates worst-case — highest values
+0419: CoverMap field average almost always LOWER than RUSLE2 for same field
+0420: Practical implication: If a CCA presents a CoverMap report showing A = 47 tons/ac/yr and an NRCS conservationist runs RUSLE2 on the same field and gets 180 tons/ac/yr, this is expected — not a bug. CoverMap averages the whole field including flat toeslopes. RUSLE2 focuses on the steepest slope segment. Both are correct for what they measure. The CoverMap report disclaimer explicitly states: “CoverMap estimates field-average soil loss. RUSLE2 evaluates the dominant critical area. RUSLE2 outputs will be higher than CoverMap estimates for the same field.”
+0421: 7.5 Cover Crop Erosion Reduction
+0422: CoverMap v1.5 adds a 4th metric to the soil loss assessment section in all output formats (Streamlit app, CCA technical report, and producer summary). This metric quantifies the erosion protection benefit of the observed cover crop stand compared to a baseline scenario with no cover crop planted.
+0423: % Erosion Reduction = (C_baseline - C_factor_adjusted) / C_baseline × 100
+0424: Where C_baseline = 0.90 × residue_multiplier represents the same tillage system with no cover crop planted. Because R, K, and LS factors remain constant between scenarios, the percentage reduction simplifies to a pure C-factor ratio comparison.
+0425: 7.6 Calculation Method
+0426: Parameter
+0427: Formula
+0428: Example (No-till corn, NDVI=0.25)
+0429: C_baseline
+0430: 0.90 × residue_multiplier
+0431: 0.90 × 0.30 = 0.27
+0432: C_factor_adjusted
+0433: NDVI lookup × residue_multiplier
+0434: 0.45 × 0.30 = 0.135
+0435: A_baseline
+0436: Current soil loss × (C_baseline / C_factor_adjusted)
+0437: 12 t/ac/yr × (0.27 / 0.135) = 24 t/ac/yr
+0438: % Reduction
+0439: (C_baseline - C_factor_adjusted) / C_baseline × 100
+0440: (0.27 - 0.135) / 0.27 × 100 = 50%
+0441: 7.7 Display Format
+0442: The erosion reduction metric appears as a 3-column table row in the 'Estimated Soil Loss vs. Soil Loss Tolerance' section:
+0443: Metric
+0444: Baseline (no cover)
+0445: Current / Saved
+0446: Est. Cover Crop Erosion Reduction
+0447: 24.0 tons/ac/yr
+0448: 12.0 tons/ac/yr (50% reduction)
+0449: Validation Status: Residue multipliers are not yet RUSLE2-validated (HIGH priority limitation). The erosion reduction estimate inherits this ±10% uncertainty directly. Baseline assumption: same tillage system, no cover crop planted. For official conservation planning use NRCS RUSLE2 Iowa State File.
+0450: This metric provides CCAs and producers with a concrete, quantified estimate of the erosion protection benefit achieved by establishing cover crops. The baseline comparison enables economic justification for cover crop investments and supports EQIP conservation practice documentation.
+0451: 8. Zone Summary Tables — Outputs
+0452: 8.1 NDVI Zone Summary Table
+0453: The NDVI zone table is computed from the clipped NDVI array using boundary-masked pixels only. Acreage is computed from pixel count × pixel area (10m × 10m = 100m² = 0.0247 acres per pixel).
+0454: Column
+0455: Computation
+0456: Units
+0457: Notes
+0458: Zone label
+0459: Dynamic from ndvi_threshold slider: Low Cover (NDVI < threshold), Marginal, Good Cover
+0460: Text
+0461: Acres
+0462: pixel_count × (10m × 10m) / 4046.86 — boundary-masked pixels only
+0463: Acres (US survey)
+0464: % of Field
+0465: zone_acres / total_valid_acres × 100
+0466: Percent
+0467: 8.2 Risk Index Zone Summary Table
+0468: The Risk Index zone table is computed from the pixel-level C×LS array after applying the boundary mask. Only pixels with valid NDVI (non-NaN) are counted. Acreage confirmed accurate against WSS AOI measurements (Spring 2026 pilot fields).
+0469: Column
+0470: Computation
+0471: Units
+0472: Zone
+0473: Critical (4), High (3), Moderate (2), Low (1) — from classify_risk_zones()
+0474: Text
+0475: C×LS Range
+0476: Fixed thresholds: >1.5, 0.7–1.5, 0.3–0.7, <0.3
+0477: Unitless
+0478: Acres
+0479: np.sum((zone_array == val) & ~np.isnan(ndvi_array)) × 0.0247
+0480: Acres
+0481: % of Field
+0482: zone_pixel_count / total_valid_pixels × 100
+0483: Percent
+0484: 8.3 Cover Crop Stand Assessment — EQIP Documentation Checklist
+0485: This table documents what satellite remote sensing can and cannot verify for NRCS EQIP Practice Standard 340 (Cover Crop). It is supplemental documentation — it is not a payment determination.
+0486: Checklist Item
+0487: Method
+0488: What it verifies
+0489: What it does NOT verify
+0490: Cover crop present
+0491: NDVI > 0.20
+0492: Spatial presence of living vegetation in field boundary
+0493: Species identity — NDVI cannot distinguish cereal rye from weeds or volunteer crop
+0494: Image date
+0495: GEE metadata + scene count
+0496: Date-stamped record before termination with scene quality indicator
+0497: That conditions are unchanged from date of image to date of field visit
+0498: Estimated biomass
+0499: NDVI proxy ±40%
+0500: Rough biomass range — order of magnitude estimate only
+0501: Actual weight. ±40% uncertainty. Not a scale measurement.
+0502: 30% ground cover
+0503: % pixels above NDVI threshold
+0504: Spatial estimate of adequate cover zones
+0505: Actual ground cover percentage — requires line transect field measurement per NRCS protocol
+0506: Seeding rate
+0507: Field records required
+0508: Nothing — satellite cannot verify seeding rate
+0509: Seeding rate, depth, method — require seed receipt and field records
+0510: Termination date
+0511: Field records required
+0512: Nothing — must be documented at time of termination
+0513: Termination date and method — NRCS Cover Crop Termination Guidelines compliance
+0514: 9. Known Limitations and Planned Improvements
+0515: Limitation
+0516: Current approach
+0517: Impact
+0518: Planned improvement
+0519: Residue multipliers not RUSLE2-validated
+0520: Agronomically-derived from literature residue cover values and CCA judgment
+0521: HIGH — affects every soil loss estimate and C-factor when residue system is selected
+0522: RUSLE2 Iowa State File comparison runs for 6–8 Iowa field scenarios. Prioritize before NRCS formal review.
+0523: No slope length in LS-factor
+0524: Simplified slope% lookup — same LS for 50ft and 300ft slope at same gradient
+0525: MODERATE — LS underestimated on long slopes, overestimated on short slopes
+0526: Flow accumulation analysis using pysheds or richdem on Iowa 3m DEM. Phase 2 feature.
+0527: Single K-factor per field
+0528: Dominant soil component only from WSS — applied uniformly
+0529: MODERATE — understates risk on Ida/Burchard slope units in mixed Shelby County fields
+0530: Pixel-level K-factor from SSURGO polygon intersection. WSS API supports this query.
+0531: No GDD / phenology adjustment
+0532: Same NDVI thresholds applied regardless of image date or growing degree days
+0533: MODERATE — March dormant rye at NDVI 0.18 is very different from May rye at same NDVI
+0534: NOAA GDD API lookup at field centroid. Adjust biomass estimate and threshold interpretation by GDD.
+0535: NDVI-biomass saturation
+0536: Cannot differentiate stands above ~3,500 kg/ha
+0537: LOW for erosion planning — above saturation means excellent stand
+0538: NDRE (red-edge) band from Sentinel-2 saturates higher — add as optional layer.
+0539: P=1.0 assumed
+0540: No support practice factor applied
+0541: LOW for most Iowa fields — few have terraces or contour strips
+0542: Add P-factor dropdown (terraced/contoured/none). Iowa FOTG has county-specific P values.
+0543: Single-season validation
+0544: One field, one season, one WSS comparison (Shelby County, Spring 2026)
+0545: HIGH — insufficient for peer review or NRCS formal acceptance
+0546: Five additional pilot fields across Iowa landscapes and soil types. ISU Extension co-validation. CIG grant funding target.
+0547: 11. References and Data Sources
+0548: 1.  Huddell, A.M., Thapa, R., Marcillo, G.S. et al. (2024). U.S. cereal rye winter cover crop growth database. Scientific Data, 11, 200. doi:10.1038/s41597-024-02996-9
+0549: 2.  Laflen, J.M. & Roose, E.J. (1998). Methodologies for assessment of soil degradation due to water erosion. Advances in Soil Science.
+0550: 3.  Iowa State University Extension and Outreach. Cover Crops. Integrated Crop Management, Iowa State University, Ames IA. crops.extension.iastate.edu/crops/cover-crops
+0551: 4.  ISU Extension PM-1901. Tillage, Manure Management and Water Quality. Iowa State University Extension.
+0552: 5.  USDA-NRCS (2002). Iowa FOTG Section I — USLE Erosion Prediction, Figure 2: Iowa Rainfall Factors. Updated Electronically September 2002. Iowa NRCS State Office, Des Moines IA.
+0553: 6.  Iowa Agronomy Technical Note 29. Dominant Critical Area. USDA-NRCS Iowa State Office, April 2024.
+0554: 7.  USDA-NRCS (2024). Conservation Practice Standard 340 — Cover Crop. Iowa Supplement.
+0555: 8.  USDA-NRCS National Soil Survey Handbook, Part 622. Land Capability Classification.
+0556: 9.  Prabhakara, K. et al. (2015). Evaluating the relationship between biomass, percent groundcover and remote sensing indices across six winter cover crop fields in Maryland. Remote Sensing of Environment, 163, 220–233.
+0557: 10. Iowa Department of Natural Resources (2024). Three-Meter Digital Elevation Model of Iowa. Iowa Geospatial Data Clearinghouse.
+0558: 11. European Space Agency (2023). Sentinel-2 User Handbook. ESA Standard Document.
+0559: 12. USDA-ARS (2013). Revised Universal Soil Loss Equation Version 2 (RUSLE2) User’s Reference Guide.
+0560: 13. Federal Communications Commission. Area API (geo.fcc.gov/api/census/block/find). Used for Iowa county R-factor zone lookup.
+0561: CoverMap Technical Methods Guide — v1.6, Spring 2026. Stephen Zimmerman CCA MS, Ankeny Iowa. Pending ISU Extension Agronomy review. This document does not constitute an official NRCS technical standard or USDA publication. For official soil loss determinations contact your local NRCS field office.

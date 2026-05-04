@@ -194,7 +194,7 @@ def estimate_soil_loss(
     ls_factor: float,
     k_factor: Any,
     t_value: int = 5,
-    r_factor: float = 150.0,
+    r_factor: float = 175.0,
 ) -> Dict[str, Any]:
     """
     Estimate annual soil loss using simplified RUSLE: A = R × K × LS × C × P.
@@ -365,7 +365,7 @@ def score_erosion_concern(
     slope_array: np.ndarray = None,
     k_factor: Any = None,
     soil_series: str = "default",
-    r_factor: float = 150.0,
+    r_factor: float = 175.0,
 ) -> Dict[str, Any]:
     """
     Score field-level erosion concern using RUSLE C x LS proxy.

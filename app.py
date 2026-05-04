@@ -478,8 +478,8 @@ try:
     st.session_state.r_factor      = _r_factor
     st.session_state.r_factor_note = _r_factor_note
 except Exception:
-    st.session_state.r_factor      = 150.0
-    st.session_state.r_factor_note = "R=150 (default — county lookup failed)"
+    st.session_state.r_factor      = 175.0
+    st.session_state.r_factor_note = "R=175 (default — county lookup failed, standard Iowa)"
 
 # ---------------------------------------------------------------------------
 # Map
@@ -508,9 +508,9 @@ if "soil_series" not in st.session_state:
 if "soil_k_factor" not in st.session_state:
     st.session_state.soil_k_factor = None
 if "r_factor" not in st.session_state:
-    st.session_state.r_factor = 150.0
+    st.session_state.r_factor = 175.0
 if "r_factor_note" not in st.session_state:
-    st.session_state.r_factor_note = "R=150 (standard Iowa zone)"
+    st.session_state.r_factor_note = "R=175 (standard Iowa zone)"
 
 
 # Use residue-adjusted C-factor for map — matches table computation
@@ -571,6 +571,18 @@ C-factor is derived from satellite NDVI using Iowa cereal rye calibration. LS-fa
 # ---------------------------------------------------------------------------
 ndvi_stats  = raster_stats(ndvi_array, ndvi_profile.get("nodata"))
 slope_stats = raster_stats(slope_percent)
+
+# Negative-mean guard: mean NDVI < -0.05 indicates cloud shadow contamination
+# in the median composite — C-factor lookup must not receive a negative mean.
+if ndvi_stats["mean"] < -0.05:
+    st.error(
+        f"Data quality error: Field-mean NDVI ({ndvi_stats['mean']:.3f}) is below "
+        f"-0.05, indicating cloud shadow contamination in the composite. "
+        f"Report generation blocked. Re-run with a narrower date range or higher "
+        f"cloud filter threshold."
+    )
+    st.stop()
+
 risk_result = score_erosion_concern(
     ndvi_stats=ndvi_stats,
     slope_stats=slope_stats,
@@ -581,7 +593,7 @@ risk_result = score_erosion_concern(
     slope_array=slope_percent,
     k_factor=st.session_state.get("soil_k_factor"),
     soil_series=st.session_state.get("soil_series", "default"),
-    r_factor=st.session_state.get("r_factor", 150.0),
+    r_factor=st.session_state.get("r_factor", 175.0),
 )
 
 # Hoist image date string — used in Section 4 and PDF call
@@ -1000,7 +1012,7 @@ _pdf_kwargs = dict(
     soil_k_factor=st.session_state.get("soil_k_factor"),
     residue_system=residue_system,
     soil_loss_result=risk_result.get("soil_loss"),
-    r_factor=st.session_state.get("r_factor", 150.0),
+    r_factor=st.session_state.get("r_factor", 175.0),
     r_factor_note=st.session_state.get("r_factor_note"),
     acres_per_pixel=_acres_per_pixel,
 )
