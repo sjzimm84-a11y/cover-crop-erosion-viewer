@@ -330,6 +330,68 @@ def classify_risk_zones(risk_array: np.ndarray) -> np.ndarray:
     return zones
 
 
+def _compute_zone_erosion_summary(
+    ndvi_array: np.ndarray,
+    slope_array: np.ndarray,
+    zone_array: np.ndarray,
+    residue_multiplier: float,
+    k_factor: Any,
+    r_factor: float,
+) -> list:
+    """Per-risk-zone RUSLE erosion and reduction summary.
+    Returns list of dicts keyed: zone_label, mean_ndvi, c_adj, c_baseline,
+    mean_ls, a_current_zone, pct_reduction, a_saved_zone, area_fraction.
+    Only zones with at least one valid pixel are included."""
+    try:
+        k = float(k_factor)
+    except (TypeError, ValueError):
+        k = None
+
+    zone_labels = {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
+    valid_mask  = ~np.isnan(ndvi_array) & ~np.isnan(zone_array)
+    total_valid = int(np.sum(valid_mask))
+    if total_valid == 0:
+        return []
+
+    results = []
+    for zone_val, zone_label in zone_labels.items():
+        zone_mask   = (zone_array == zone_val) & valid_mask
+        pixel_count = int(np.sum(zone_mask))
+        if pixel_count == 0:
+            continue
+
+        mean_ndvi     = float(np.nanmean(ndvi_array[zone_mask]))
+        mean_ls       = float(np.nanmean(_analytical_ls_factor(slope_array[zone_mask])))
+        area_fraction = pixel_count / total_valid
+
+        c_ndvi     = _lookup_c_factor(mean_ndvi)
+        c_adj      = c_ndvi * residue_multiplier
+        c_baseline = 0.90 * residue_multiplier
+
+        a_current_zone = r_factor * k * mean_ls * c_adj if k is not None else None
+
+        if k is not None and c_adj > 0 and c_baseline > c_adj:
+            pct_reduction = (c_baseline - c_adj) / c_baseline * 100
+            a_saved_zone  = r_factor * k * mean_ls * (c_baseline - c_adj)
+        else:
+            pct_reduction = 0.0
+            a_saved_zone  = 0.0
+
+        results.append({
+            "zone_label":     zone_label,
+            "mean_ndvi":      round(mean_ndvi, 3),
+            "c_adj":          round(c_adj, 3),
+            "c_baseline":     round(c_baseline, 3),
+            "mean_ls":        round(mean_ls, 2),
+            "a_current_zone": round(a_current_zone, 2) if a_current_zone is not None else None,
+            "pct_reduction":  round(pct_reduction, 1),
+            "a_saved_zone":   round(a_saved_zone, 2),
+            "area_fraction":  round(area_fraction, 4),
+        })
+
+    return results
+
+
 def compute_ndvi_zone_summary(
     ndvi_array: np.ndarray,
     ndvi_threshold: float = 0.20,
@@ -484,6 +546,17 @@ def score_erosion_concern(
             4: int(np.sum((zone_array_out == 4) & valid_mask)),
         }
 
+    zone_erosion_out = []
+    if zone_array_out is not None and ndvi_array is not None and slope_array is not None:
+        zone_erosion_out = _compute_zone_erosion_summary(
+            ndvi_array=ndvi_array,
+            slope_array=slope_array,
+            zone_array=zone_array_out,
+            residue_multiplier=residue_multiplier,
+            k_factor=k_factor,
+            r_factor=r_factor,
+        )
+
     return {
         "concern_level":       concern,
         "score":               score_int,
@@ -496,6 +569,7 @@ def score_erosion_concern(
         "risk_array":          risk_array_out,
         "zone_array":          zone_array_out,
         "zone_counts":         zone_counts_out,
+        "zone_erosion_summary": zone_erosion_out,
         "soil_loss":           soil_loss_result,
         "low_cover":           ndvi_mean < ndvi_threshold,
         "steep_slope":         slope_mean > slope_threshold,

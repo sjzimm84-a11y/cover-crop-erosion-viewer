@@ -914,6 +914,69 @@ def generate_field_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
+    # EROSION REDUCTION BY LANDSCAPE POSITION
+    # -----------------------------------------------------------------------
+    _zes = risk_result.get("zone_erosion_summary", [])
+    if _zes:
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=MID_GRAY, spaceAfter=4))
+        story.append(Paragraph("Erosion Reduction by Landscape Position", section_style))
+        _zone_hdr = [
+            "Risk Zone", "Mean NDVI", "C-factor", "Mean LS",
+            "Est. Soil Loss\n(t/ac/yr)", "Est. Reduction\n(%)",
+            "Est. Soil Saved\n(t/ac/yr)",
+        ]
+        _zone_rows = [_zone_hdr]
+        for _z in _zes:
+            _a_cur = f"{_z['a_current_zone']:.1f}" if _z["a_current_zone"] is not None else "K unavail."
+            _pct   = f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] > 0 else "N/A"
+            _a_sav = f"{_z['a_saved_zone']:.1f}"   if _z["pct_reduction"] > 0 else "N/A"
+            _zone_rows.append([
+                _z["zone_label"],
+                f"{_z['mean_ndvi']:.3f}",
+                f"{_z['c_adj']:.3f}",
+                f"{_z['mean_ls']:.2f}",
+                _a_cur,
+                _pct,
+                _a_sav,
+            ])
+        _zt = Table(
+            _zone_rows,
+            colWidths=[1.0*inch, 0.75*inch, 0.75*inch, 0.65*inch,
+                       1.1*inch, 0.9*inch, 1.85*inch],
+        )
+        _zt_style = TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.0),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+            ("FONTNAME",      (0, 1), (0, -1),  "Helvetica-Bold"),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ])
+        _zone_color_map = {
+            "Low":      GREEN_BADGE,
+            "Moderate": AMBER_BADGE,
+            "High":     RED_BADGE,
+            "Critical": colors.HexColor("#6e1c1c"),
+        }
+        for _ri, _z in enumerate(_zes, start=1):
+            _zt_style.add("TEXTCOLOR", (0, _ri), (0, _ri),
+                          _zone_color_map.get(_z["zone_label"], TEXT_DARK))
+        _zt.setStyle(_zt_style)
+        story.append(_zt)
+        story.append(Paragraph(
+            "<i>Zone estimates use zone-mean NDVI and LS inputs; zone percentages will not "
+            "average exactly to field-level figures due to bin assignment differences.</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
     # CCA FIELD VERIFICATION NOTES
     # -----------------------------------------------------------------------
     story.append(Spacer(1, 8))
@@ -1506,12 +1569,24 @@ def generate_producer_report(
         _a_base_p  = _sl_p * (_c_base_p / _c_adj_p)
         _pct_p     = (_c_base_p - _c_adj_p) / _c_base_p * 100
         _a_saved_p = _a_base_p - _sl_p
+        # Area-weighted A_saved from zone_erosion_summary when available
+        _zes_p = risk_result.get("zone_erosion_summary", [])
+        _weighted_saved = (
+            sum(z["a_saved_zone"] * z["area_fraction"]
+                for z in _zes_p if z.get("a_saved_zone") is not None)
+            if _zes_p else None
+        )
+        _saved_label   = ("Est. Soil Saved (weighted avg, t/ac/yr)"
+                          if _weighted_saved is not None else "Saved")
+        _saved_display = (f"{_weighted_saved:.1f} t/ac/yr"
+                          if _weighted_saved is not None
+                          else f"{_a_saved_p:.1f} t/ac/yr")
         cc_red_p = [
-            ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", "Saved"],
+            ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", _saved_label],
             [
                 f"{_pct_p:.0f}% reduction",
                 f"{_a_base_p:.1f} t/ac/yr",
-                f"{_a_saved_p:.1f} t/ac/yr",
+                _saved_display,
             ],
         ]
         cc_red_table_p = Table(
