@@ -598,9 +598,10 @@ risk_result = score_erosion_concern(
 
 _zone_erosion_summary = risk_result.get("zone_erosion_summary", [])
 _a_saved_weighted = (
-    sum(z["a_saved_zone"] * z["area_fraction"] for z in _zone_erosion_summary)
+    sum(z["a_saved_zone"] * z["area_fraction"]
+        for z in _zone_erosion_summary if z["a_saved_zone"] is not None)
     if _zone_erosion_summary else None
-)
+) or None
 
 # Hoist image date string — used in Section 4 and PDF call
 _s_latest   = st.session_state.ndvi_scene_latest
@@ -657,15 +658,10 @@ zone_summary = compute_ndvi_zone_summary(
 
 st.subheader("📋 Cover Crop Stand — NDVI Zone Summary")
 zone_summary_display = zone_summary.copy()
-if "slope_mean" in zone_summary_display.columns:
-    zone_summary_display["slope_mean"] = zone_summary_display["slope_mean"].apply(
-        lambda x: f"{x:.1f}%"
-    )
 zone_summary_display = zone_summary_display.rename(columns={
-    "zone":       "Zone",
-    "percent":    "% of Field",
-    "ndvi_mean":  "NDVI Mean",
-    "slope_mean": "Slope Mean (3m DEM, UTM)",
+    "zone":      "Zone",
+    "percent":   "% of Field",
+    "ndvi_mean": "NDVI Mean",
 })
 
 # Dynamic NDVI zone labels based on current threshold slider
@@ -724,7 +720,6 @@ _total_row = pd.DataFrame([{
     "Acres":     round(_total_valid_acres, 1),
     _pct_col:    100.0,
     "NDVI Mean": "",
-    "Slope Mean (3m DEM, UTM)": "",
 }])
 zone_summary_display = pd.concat(
     [zone_summary_display, _total_row],
@@ -818,8 +813,8 @@ if _zone_erosion_summary:
             "C-factor":                     f"{_z['c_adj']:.3f}",
             "Mean LS":                      f"{_z['mean_ls']:.2f}",
             "Est. Soil Loss (t/ac/yr)":     f"{_z['a_current_zone']:.2f}" if _z["a_current_zone"] is not None else "—",
-            "Est. Reduction":               f"{_z['pct_reduction']:.0f}%",
-            "Est. Soil Saved (t/ac/yr)":    f"{_z['a_saved_zone']:.2f}",
+            "Est. Reduction":               f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "—",
+            "Est. Soil Saved (t/ac/yr)":    f"{_z['a_saved_zone']:.2f}" if _z["a_saved_zone"] is not None else "—",
         })
     _lp_rows.append({
         "Risk Zone":                    "Field (area-weighted)",
@@ -923,11 +918,12 @@ c5.metric("C-Factor",       f"{risk_result['c_factor']:.3f}",
           help="RUSLE C-factor (residue-adjusted). Lower = better cover.")
 c6.metric("Risk Index",     f"{risk_result['rusle_score']:.3f}",
           help="Unitless erosion risk index (C-factor × LS-factor).")
-if _soil_kf:
+try:
     c7.metric("Soil K-Factor", f"{float(_soil_kf):.3f}",
               help=f"Soil series: {_soil_series} — K-factor from SSURGO")
-else:
-    c7.metric("Dominant Soil", _soil_series)
+except (TypeError, ValueError):
+    c7.metric("Soil K-Factor", "N/A",
+              help=f"Soil series: {_soil_series} — K-factor not returned from SSURGO")
 
 if risk_result["residue_multiplier"] < 1.0:
     st.caption(

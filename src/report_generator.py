@@ -933,8 +933,8 @@ def generate_field_report(
         _zone_rows = [_zone_hdr]
         for _z in _zes:
             _a_cur = f"{_z['a_current_zone']:.1f}" if _z["a_current_zone"] is not None else "K unavail."
-            _pct   = f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] > 0 else "N/A"
-            _a_sav = f"{_z['a_saved_zone']:.1f}"   if _z["pct_reduction"] > 0 else "N/A"
+            _pct   = f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "N/A"
+            _a_sav = f"{_z['a_saved_zone']:.1f}"   if _z["a_saved_zone"] is not None else "N/A"
             _zone_rows.append([
                 _z["zone_label"],
                 f"{_z['mean_ndvi']:.3f}",

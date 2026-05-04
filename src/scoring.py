@@ -374,8 +374,8 @@ def _compute_zone_erosion_summary(
             pct_reduction = (c_baseline - c_adj) / c_baseline * 100
             a_saved_zone  = r_factor * k * mean_ls * (c_baseline - c_adj)
         else:
-            pct_reduction = 0.0
-            a_saved_zone  = 0.0
+            pct_reduction = None
+            a_saved_zone  = None
 
         results.append({
             "zone_label":     zone_label,
