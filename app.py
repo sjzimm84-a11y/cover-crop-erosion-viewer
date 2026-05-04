@@ -596,6 +596,12 @@ risk_result = score_erosion_concern(
     r_factor=st.session_state.get("r_factor", 175.0),
 )
 
+_zone_erosion_summary = risk_result.get("zone_erosion_summary", [])
+_a_saved_weighted = (
+    sum(z["a_saved_zone"] * z["area_fraction"] for z in _zone_erosion_summary)
+    if _zone_erosion_summary else None
+)
+
 # Hoist image date string — used in Section 4 and PDF call
 _s_latest   = st.session_state.ndvi_scene_latest
 _s_earliest = st.session_state.ndvi_scene_earliest
@@ -798,6 +804,50 @@ else:
         "scoring pipeline."
     )
 
+# Erosion Reduction by Landscape Position
+if _zone_erosion_summary:
+    assert "mean_ls" in _zone_erosion_summary[0], (
+        "mean_ls key missing from zone_erosion_summary — check _compute_zone_erosion_summary()"
+    )
+    st.subheader("📊 Erosion Reduction by Landscape Position")
+    _lp_rows = []
+    for _z in _zone_erosion_summary:
+        _lp_rows.append({
+            "Risk Zone":                    _z["zone_label"],
+            "Mean NDVI":                    f"{_z['mean_ndvi']:.3f}",
+            "C-factor":                     f"{_z['c_adj']:.3f}",
+            "Mean LS":                      f"{_z['mean_ls']:.2f}",
+            "Est. Soil Loss (t/ac/yr)":     f"{_z['a_current_zone']:.2f}" if _z["a_current_zone"] is not None else "—",
+            "Est. Reduction":               f"{_z['pct_reduction']:.0f}%",
+            "Est. Soil Saved (t/ac/yr)":    f"{_z['a_saved_zone']:.2f}",
+        })
+    _lp_rows.append({
+        "Risk Zone":                    "Field (area-weighted)",
+        "Mean NDVI":                    "—",
+        "C-factor":                     "—",
+        "Mean LS":                      "—",
+        "Est. Soil Loss (t/ac/yr)":     "—",
+        "Est. Reduction":               "—",
+        "Est. Soil Saved (t/ac/yr)":    f"{_a_saved_weighted:.2f}" if _a_saved_weighted is not None else "—",
+    })
+    _lp_df = pd.DataFrame(_lp_rows)
+    _n_data = len(_lp_rows) - 1
+
+    def _style_lp_footer(row):
+        if row.name == _n_data:
+            return ["font-weight: bold; background-color: #1f2937"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(
+        _lp_df.style.apply(_style_lp_footer, axis=1),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "Identical reduction percentages across zones indicate shared C-factor bin "
+        "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation."
+    )
+
 # === SECTION 4: COVER CROP STAND ASSESSMENT ===
 st.subheader("📋 Cover Crop Stand Assessment — Satellite Documentation")
 
@@ -926,24 +976,26 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
     _res_mult   = risk_result.get("residue_multiplier", 1.0)
     _c_baseline = 0.90 * _res_mult
     if _c_adj > 0 and _c_baseline > _c_adj:
-        _a_baseline    = _sl * (_c_baseline / _c_adj)
         _pct_reduction = (_c_baseline - _c_adj) / _c_baseline * 100
-        _a_saved       = _a_baseline - _sl
+        _a_baseline    = _sl * (_c_baseline / _c_adj)
         sl4.metric(
             "Est. Cover Crop Erosion Reduction",
             f"{_pct_reduction:.0f}%",
             help=(
-                f"Estimated erosion reduction attributable to cover crop canopy. "
-                f"Baseline: {_a_baseline:.1f} t/ac/yr (same tillage, no cover). "
-                f"Saved: {_a_saved:.1f} t/ac/yr. "
-                f"Reduction = (C_baseline − C_adjusted) / C_baseline. "
-                f"R, K, LS held constant. ±10 pt uncertainty until residue multipliers are RUSLE2-validated."
+                "Estimated soil saved attributable to cover crop canopy. "
+                "Area-weighted across Risk Index zones. Baseline and zone calculations "
+                "detailed in CCA report. ±10 pt uncertainty until residue multipliers are RUSLE2-validated."
             ),
+        )
+        _saved_str = (
+            f"(saved {_a_saved_weighted:.1f} t/ac/yr, area-weighted). "
+            if _a_saved_weighted is not None
+            else ""
         )
         st.caption(
             f"Cover crop baseline: {_a_baseline:.1f} t/ac/yr → with cover: {_sl:.1f} t/ac/yr "
-            f"(saved {_a_saved:.1f} t/ac/yr). "
-            f"C_baseline = 0.90 × residue multiplier ({_res_mult:.3f}) = {_c_baseline:.3f}."
+            + _saved_str
+            + f"C_baseline = 0.90 × residue multiplier ({_res_mult:.3f}) = {_c_baseline:.3f}."
         )
     else:
         sl4.metric("Est. Cover Crop Erosion Reduction", "N/A",
