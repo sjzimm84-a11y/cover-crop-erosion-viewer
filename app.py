@@ -599,12 +599,15 @@ risk_result = score_erosion_concern(
 _zone_erosion_summary   = risk_result.get("zone_erosion_summary", [])
 _a_saved_weighted       = None
 _a_baseline_weighted    = None
+_a_current_weighted     = None
 _pct_reduction_weighted = None
 if _zone_erosion_summary:
     _ws = sum(z["a_saved_zone"]    * z["area_fraction"] for z in _zone_erosion_summary if z["a_saved_zone"]    is not None)
     _wb = sum(z["a_baseline_zone"] * z["area_fraction"] for z in _zone_erosion_summary if z["a_baseline_zone"] is not None)
+    _wc = sum(z["a_current_zone"]  * z["area_fraction"] for z in _zone_erosion_summary if z["a_current_zone"]  is not None)
     _a_saved_weighted    = _ws or None
     _a_baseline_weighted = _wb or None
+    _a_current_weighted  = _wc or None
     if _a_baseline_weighted:
         _pct_reduction_weighted = (_a_saved_weighted / _a_baseline_weighted) * 100
 
@@ -804,12 +807,12 @@ else:
         "scoring pipeline."
     )
 
-# Erosion Reduction by Landscape Position
+# Erosion Reduction by Risk Zone
 if _zone_erosion_summary:
     assert "mean_ls" in _zone_erosion_summary[0], (
         "mean_ls key missing from zone_erosion_summary — check _compute_zone_erosion_summary()"
     )
-    st.subheader("📊 Erosion Reduction by Landscape Position")
+    st.subheader("📊 Erosion Reduction by Risk Zone")
     _lp_rows = []
     for _z in _zone_erosion_summary:
         _lp_rows.append({
@@ -830,7 +833,7 @@ if _zone_erosion_summary:
         "Mean NDVI":                    "—",
         "C-factor":                     "—",
         "Mean LS":                      "—",
-        "Est. Soil Loss (t/ac/yr)":     "—",
+        "Est. Soil Loss (t/ac/yr)":     f"{_a_current_weighted:.2f}" if _a_current_weighted is not None else "—",
         "Est. Reduction (%)":           f"{_pct_reduction_weighted:.1f}%" if _pct_reduction_weighted is not None else "—",
         "Est. Soil Saved (t/ac/yr)":    f"{_a_saved_weighted:.1f}" if _a_saved_weighted is not None else "—",
     })

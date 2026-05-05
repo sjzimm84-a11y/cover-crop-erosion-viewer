@@ -798,7 +798,7 @@ def generate_field_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
-    # EROSION REDUCTION BY LANDSCAPE POSITION
+    # EROSION REDUCTION BY RISK ZONE
     # -----------------------------------------------------------------------
     _zes = risk_result.get("zone_erosion_summary", [])
     if _zes:
@@ -810,13 +810,17 @@ def generate_field_report(
             z["a_baseline_zone"] * z["area_fraction"]
             for z in _zes if z.get("a_baseline_zone") is not None
         ) or None
+        _a_current_weighted_r  = sum(
+            z["a_current_zone"]  * z["area_fraction"]
+            for z in _zes if z.get("a_current_zone") is not None
+        ) or None
         _pct_reduction_weighted_r = (
             (_a_saved_weighted_r / _a_baseline_weighted_r) * 100
             if _a_baseline_weighted_r else None
         )
         story.append(HRFlowable(width="100%", thickness=0.5,
                                 color=MID_GRAY, spaceAfter=4))
-        story.append(Paragraph("Erosion Reduction by Landscape Position", section_style))
+        story.append(Paragraph("Erosion Reduction by Risk Zone", section_style))
         _zone_hdr = [
             "Risk Zone", "Zone Area\n(%)", "Mean Slope\n(%)", "Mean NDVI", "C-factor", "Mean LS",
             "Est. Soil Loss\n(t/ac/yr)", "Est. Reduction\n(%)",
@@ -838,10 +842,15 @@ def generate_field_report(
                 _pct,
                 _a_sav,
             ])
+        _footer_label_style = ParagraphStyle(
+            "FooterLabel", parent=styles["Normal"],
+            fontSize=8, fontName="Helvetica-Bold", textColor=colors.white,
+        )
         _zone_rows.append([
-            "Field (area-weighted)",
+            Paragraph("Field (area-weighted)", _footer_label_style),
             "100%",
-            "—", "—", "—", "—", "—",
+            "—", "—", "—", "—",
+            f"{_a_current_weighted_r:.1f}" if _a_current_weighted_r is not None else "—",
             f"{_pct_reduction_weighted_r:.1f}%" if _pct_reduction_weighted_r is not None else "—",
             f"{_a_saved_weighted_r:.1f}"         if _a_saved_weighted_r       is not None else "—",
         ])
