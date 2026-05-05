@@ -155,11 +155,11 @@ with st.sidebar:
         ndvi_window = st.selectbox(
             "NDVI time window",
             options=["Last 7 days", "Last 14 days", "Last 30 days", "Custom spring window"],
-            index=0,
+            index=3,
         )
         if ndvi_window == "Custom spring window":
             ndvi_year = st.slider("Year", 2021, datetime.now().year, datetime.now().year)
-            ndvi_start = st.text_input("Start (MM-DD)", value="03-01")
+            ndvi_start = st.text_input("Start (MM-DD)", value="04-05")
             ndvi_end   = st.text_input("End (MM-DD)",   value="04-20")
         else:
             ndvi_year  = None
@@ -596,12 +596,17 @@ risk_result = score_erosion_concern(
     r_factor=st.session_state.get("r_factor", 175.0),
 )
 
-_zone_erosion_summary = risk_result.get("zone_erosion_summary", [])
-_a_saved_weighted = (
-    sum(z["a_saved_zone"] * z["area_fraction"]
-        for z in _zone_erosion_summary if z["a_saved_zone"] is not None)
-    if _zone_erosion_summary else None
-) or None
+_zone_erosion_summary   = risk_result.get("zone_erosion_summary", [])
+_a_saved_weighted       = None
+_a_baseline_weighted    = None
+_pct_reduction_weighted = None
+if _zone_erosion_summary:
+    _ws = sum(z["a_saved_zone"]    * z["area_fraction"] for z in _zone_erosion_summary if z["a_saved_zone"]    is not None)
+    _wb = sum(z["a_baseline_zone"] * z["area_fraction"] for z in _zone_erosion_summary if z["a_baseline_zone"] is not None)
+    _a_saved_weighted    = _ws or None
+    _a_baseline_weighted = _wb or None
+    if _a_baseline_weighted:
+        _pct_reduction_weighted = (_a_saved_weighted / _a_baseline_weighted) * 100
 
 # Hoist image date string — used in Section 4 and PDF call
 _s_latest   = st.session_state.ndvi_scene_latest
@@ -809,21 +814,25 @@ if _zone_erosion_summary:
     for _z in _zone_erosion_summary:
         _lp_rows.append({
             "Risk Zone":                    _z["zone_label"],
+            "Zone Area (%)":                f"{_z['area_fraction']*100:.0f}%",
+            "Mean Slope (%)":               f"{_z['mean_slope_pct']:.1f}%",
             "Mean NDVI":                    f"{_z['mean_ndvi']:.3f}",
             "C-factor":                     f"{_z['c_adj']:.3f}",
             "Mean LS":                      f"{_z['mean_ls']:.2f}",
             "Est. Soil Loss (t/ac/yr)":     f"{_z['a_current_zone']:.2f}" if _z["a_current_zone"] is not None else "—",
-            "Est. Reduction":               f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "—",
+            "Est. Reduction (%)":           f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "—",
             "Est. Soil Saved (t/ac/yr)":    f"{_z['a_saved_zone']:.2f}" if _z["a_saved_zone"] is not None else "—",
         })
     _lp_rows.append({
         "Risk Zone":                    "Field (area-weighted)",
+        "Zone Area (%)":                "100%",
+        "Mean Slope (%)":               "—",
         "Mean NDVI":                    "—",
         "C-factor":                     "—",
         "Mean LS":                      "—",
         "Est. Soil Loss (t/ac/yr)":     "—",
-        "Est. Reduction":               "—",
-        "Est. Soil Saved (t/ac/yr)":    f"{_a_saved_weighted:.2f}" if _a_saved_weighted is not None else "—",
+        "Est. Reduction (%)":           f"{_pct_reduction_weighted:.1f}%" if _pct_reduction_weighted is not None else "—",
+        "Est. Soil Saved (t/ac/yr)":    f"{_a_saved_weighted:.1f}" if _a_saved_weighted is not None else "—",
     })
     _lp_df = pd.DataFrame(_lp_rows)
     _n_data = len(_lp_rows) - 1
@@ -840,7 +849,8 @@ if _zone_erosion_summary:
     )
     st.caption(
         "Identical reduction percentages across zones indicate shared C-factor bin "
-        "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation."
+        "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation. "
+        "Residue multipliers not yet RUSLE2-validated. ±10 pt uncertainty."
     )
 
 # === SECTION 4: COVER CROP STAND ASSESSMENT ===
@@ -951,7 +961,7 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
     _tv = _sl_result["t_value"]
     _rt = _sl_result["ratio_to_t"]
     _sc = _sl_result["status_code"]
-    sl1, sl2, sl3, sl4 = st.columns(4)
+    sl1, sl2, sl3 = st.columns(3)
     sl1.metric(
         "Est. Soil Loss",
         f"{_sl:.1f} t/ac/yr",
@@ -968,34 +978,6 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
         delta="Within T" if _sc == "within_t" else "Over T",
         delta_color="normal" if _sc == "within_t" else "inverse",
     )
-    _c_adj      = risk_result.get("c_factor", 0)
-    _res_mult   = risk_result.get("residue_multiplier", 1.0)
-    _c_baseline = 0.90 * _res_mult
-    if _c_adj > 0 and _c_baseline > _c_adj:
-        _pct_reduction = (_c_baseline - _c_adj) / _c_baseline * 100
-        _a_baseline    = _sl * (_c_baseline / _c_adj)
-        sl4.metric(
-            "Est. Cover Crop Erosion Reduction",
-            f"{_pct_reduction:.0f}%",
-            help=(
-                "Estimated soil saved attributable to cover crop canopy. "
-                "Area-weighted across Risk Index zones. Baseline and zone calculations "
-                "detailed in CCA report. ±10 pt uncertainty until residue multipliers are RUSLE2-validated."
-            ),
-        )
-        _saved_str = (
-            f"(saved {_a_saved_weighted:.1f} t/ac/yr, area-weighted). "
-            if _a_saved_weighted is not None
-            else ""
-        )
-        st.caption(
-            f"Cover crop baseline: {_a_baseline:.1f} t/ac/yr → with cover: {_sl:.1f} t/ac/yr "
-            + _saved_str
-            + f"C_baseline = 0.90 × residue multiplier ({_res_mult:.3f}) = {_c_baseline:.3f}."
-        )
-    else:
-        sl4.metric("Est. Cover Crop Erosion Reduction", "N/A",
-                   help="Cannot compute — C-factor at or above no-cover baseline.")
     _status_fn = {
         "within_t":   st.success,
         "near_t":     st.warning,

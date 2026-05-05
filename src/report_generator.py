@@ -798,6 +798,95 @@ def generate_field_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
+    # EROSION REDUCTION BY LANDSCAPE POSITION
+    # -----------------------------------------------------------------------
+    _zes = risk_result.get("zone_erosion_summary", [])
+    if _zes:
+        _a_saved_weighted_r    = sum(
+            z["a_saved_zone"]    * z["area_fraction"]
+            for z in _zes if z.get("a_saved_zone") is not None
+        ) or None
+        _a_baseline_weighted_r = sum(
+            z["a_baseline_zone"] * z["area_fraction"]
+            for z in _zes if z.get("a_baseline_zone") is not None
+        ) or None
+        _pct_reduction_weighted_r = (
+            (_a_saved_weighted_r / _a_baseline_weighted_r) * 100
+            if _a_baseline_weighted_r else None
+        )
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=MID_GRAY, spaceAfter=4))
+        story.append(Paragraph("Erosion Reduction by Landscape Position", section_style))
+        _zone_hdr = [
+            "Risk Zone", "Zone Area\n(%)", "Mean Slope\n(%)", "Mean NDVI", "C-factor", "Mean LS",
+            "Est. Soil Loss\n(t/ac/yr)", "Est. Reduction\n(%)",
+            "Est. Soil Saved\n(t/ac/yr)",
+        ]
+        _zone_rows = [_zone_hdr]
+        for _z in _zes:
+            _a_cur = f"{_z['a_current_zone']:.1f}" if _z["a_current_zone"] is not None else "K unavail."
+            _pct   = f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "N/A"
+            _a_sav = f"{_z['a_saved_zone']:.1f}"   if _z["a_saved_zone"] is not None else "N/A"
+            _zone_rows.append([
+                _z["zone_label"],
+                f"{_z['area_fraction']*100:.0f}%",
+                f"{_z['mean_slope_pct']:.1f}%",
+                f"{_z['mean_ndvi']:.3f}",
+                f"{_z['c_adj']:.3f}",
+                f"{_z['mean_ls']:.2f}",
+                _a_cur,
+                _pct,
+                _a_sav,
+            ])
+        _zone_rows.append([
+            "Field (area-weighted)",
+            "100%",
+            "—", "—", "—", "—", "—",
+            f"{_pct_reduction_weighted_r:.1f}%" if _pct_reduction_weighted_r is not None else "—",
+            f"{_a_saved_weighted_r:.1f}"         if _a_saved_weighted_r       is not None else "—",
+        ])
+        _footer_row_idx = len(_zone_rows) - 1
+        _zt = Table(
+            _zone_rows,
+            colWidths=[1.0*inch, 0.55*inch, 0.65*inch, 0.65*inch, 0.60*inch, 0.60*inch,
+                       0.90*inch, 0.80*inch, 1.25*inch],
+        )
+        _zt_style = TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),           BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),           colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),           "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1),          8.0),
+            ("ROWBACKGROUNDS",(0, 1), (-1, _footer_row_idx - 1), [LIGHT_GRAY, colors.white]),
+            ("FONTNAME",      (0, 1), (0, -1),           "Helvetica-Bold"),
+            ("ALIGN",         (0, 0), (-1, -1),          "CENTER"),
+            ("GRID",          (0, 0), (-1, -1),          0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1),          4),
+            ("TOPPADDING",    (0, 0), (-1, -1),          4),
+            ("LEFTPADDING",   (0, 0), (-1, -1),          4),
+            ("BACKGROUND",    (0, _footer_row_idx), (-1, _footer_row_idx), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR",     (0, _footer_row_idx), (-1, _footer_row_idx), colors.white),
+            ("FONTNAME",      (0, _footer_row_idx), (-1, _footer_row_idx), "Helvetica-Bold"),
+        ])
+        _zone_color_map = {
+            "Low":      GREEN_BADGE,
+            "Moderate": AMBER_BADGE,
+            "High":     RED_BADGE,
+            "Critical": colors.HexColor("#6e1c1c"),
+        }
+        for _ri, _z in enumerate(_zes, start=1):
+            _zt_style.add("TEXTCOLOR", (0, _ri), (0, _ri),
+                          _zone_color_map.get(_z["zone_label"], TEXT_DARK))
+        _zt.setStyle(_zt_style)
+        story.append(_zt)
+        story.append(Paragraph(
+            "<i>Identical reduction percentages across zones indicate shared C-factor bin "
+            "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation. "
+            "Residue multipliers not yet RUSLE2-validated. ±10 pt uncertainty.</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
     # ESTIMATED SOIL LOSS vs. SOIL LOSS TOLERANCE
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
@@ -850,45 +939,6 @@ def generate_field_report(
             ("LEFTPADDING",   (0, 0), (-1, -1), 6),
         ]))
         story.append(sl_table)
-        _c_adj_r    = soil_loss_result.get("c_factor", risk_result.get("c_factor", 0))
-        _res_mult_r = risk_result.get("residue_multiplier", 1.0)
-        _c_base_r   = 0.90 * _res_mult_r
-        if _c_adj_r > 0 and _c_base_r > _c_adj_r:
-            _a_base_r    = _sl * (_c_base_r / _c_adj_r)
-            _pct_r       = (_c_base_r - _c_adj_r) / _c_base_r * 100
-            _a_saved_r   = _a_base_r - _sl
-            cc_red_data = [
-                ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", "Saved"],
-                [
-                    f"{_pct_r:.0f}% reduction",
-                    f"{_a_base_r:.1f} t/ac/yr",
-                    f"{_a_saved_r:.1f} t/ac/yr",
-                ],
-            ]
-            cc_red_table = Table(
-                cc_red_data,
-                colWidths=[2.5 * inch, 2.0 * inch, 2.5 * inch],
-            )
-            cc_red_table.setStyle(TableStyle([
-                ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
-                ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-                ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-                ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-                ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
-                ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-                ("FONTNAME",      (0, 1), (0, 1),   "Helvetica-Bold"),
-                ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING",    (0, 0), (-1, -1), 4),
-                ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-            ]))
-            story.append(Spacer(1, 4))
-            story.append(cc_red_table)
-            story.append(Paragraph(
-                f"<i>Cover crop reduction: C_baseline ({_c_base_r:.3f}) = 0.90 × residue multiplier ({_res_mult_r:.3f}). "
-                f"R, K, LS held constant. Estimate ±10 percentage points pending RUSLE2 residue multiplier validation.</i>",
-                small_style,
-            ))
         _r_note = r_factor_note or f"R={r_factor:.0f} (Iowa erosivity index)"
         story.append(Paragraph(
             f"<i>Iowa R-factor: {_r_note} | "
@@ -912,85 +962,6 @@ def generate_field_report(
             body_style,
         ))
     story.append(Spacer(1, 6))
-
-    # -----------------------------------------------------------------------
-    # EROSION REDUCTION BY LANDSCAPE POSITION
-    # -----------------------------------------------------------------------
-    _zes = risk_result.get("zone_erosion_summary", [])
-    if _zes:
-        _a_saved_weighted_r = sum(
-            z["a_saved_zone"] * z["area_fraction"]
-            for z in _zes if z.get("a_saved_zone") is not None
-        )
-        story.append(HRFlowable(width="100%", thickness=0.5,
-                                color=MID_GRAY, spaceAfter=4))
-        story.append(Paragraph("Erosion Reduction by Landscape Position", section_style))
-        _zone_hdr = [
-            "Risk Zone", "Mean NDVI", "C-factor", "Mean LS",
-            "Est. Soil Loss\n(t/ac/yr)", "Est. Reduction\n(%)",
-            "Est. Soil Saved\n(t/ac/yr)",
-        ]
-        _zone_rows = [_zone_hdr]
-        for _z in _zes:
-            _a_cur = f"{_z['a_current_zone']:.1f}" if _z["a_current_zone"] is not None else "K unavail."
-            _pct   = f"{_z['pct_reduction']:.0f}%" if _z["pct_reduction"] is not None else "N/A"
-            _a_sav = f"{_z['a_saved_zone']:.1f}"   if _z["a_saved_zone"] is not None else "N/A"
-            _zone_rows.append([
-                _z["zone_label"],
-                f"{_z['mean_ndvi']:.3f}",
-                f"{_z['c_adj']:.3f}",
-                f"{_z['mean_ls']:.2f}",
-                _a_cur,
-                _pct,
-                _a_sav,
-            ])
-        # Footer row: field area-weighted soil saved only
-        _zone_rows.append([
-            "Field (area-weighted)",
-            "—", "—", "—", "—", "—",
-            f"{_a_saved_weighted_r:.1f}",
-        ])
-        _footer_row_idx = len(_zone_rows) - 1
-        _zt = Table(
-            _zone_rows,
-            colWidths=[1.0*inch, 0.75*inch, 0.75*inch, 0.65*inch,
-                       1.1*inch, 0.9*inch, 1.85*inch],
-        )
-        _zt_style = TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0),           BLUE_ACCENT),
-            ("TEXTCOLOR",     (0, 0), (-1, 0),           colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0),           "Helvetica-Bold"),
-            ("FONTSIZE",      (0, 0), (-1, -1),          8.0),
-            ("ROWBACKGROUNDS",(0, 1), (-1, _footer_row_idx - 1), [LIGHT_GRAY, colors.white]),
-            ("FONTNAME",      (0, 1), (0, -1),           "Helvetica-Bold"),
-            ("ALIGN",         (0, 0), (-1, -1),          "CENTER"),
-            ("GRID",          (0, 0), (-1, -1),          0.3, MID_GRAY),
-            ("BOTTOMPADDING", (0, 0), (-1, -1),          4),
-            ("TOPPADDING",    (0, 0), (-1, -1),          4),
-            ("LEFTPADDING",   (0, 0), (-1, -1),          4),
-            # Footer row styling
-            ("BACKGROUND",    (0, _footer_row_idx), (-1, _footer_row_idx), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR",     (0, _footer_row_idx), (-1, _footer_row_idx), colors.white),
-            ("FONTNAME",      (0, _footer_row_idx), (-1, _footer_row_idx), "Helvetica-Bold"),
-        ])
-        _zone_color_map = {
-            "Low":      GREEN_BADGE,
-            "Moderate": AMBER_BADGE,
-            "High":     RED_BADGE,
-            "Critical": colors.HexColor("#6e1c1c"),
-        }
-        for _ri, _z in enumerate(_zes, start=1):
-            _zt_style.add("TEXTCOLOR", (0, _ri), (0, _ri),
-                          _zone_color_map.get(_z["zone_label"], TEXT_DARK))
-        _zt.setStyle(_zt_style)
-        story.append(_zt)
-        story.append(Paragraph(
-            "<i>Identical reduction percentages across zones indicate shared C-factor bin "
-            "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation. "
-            "Zone estimates use zone-mean NDVI and LS inputs.</i>",
-            small_style,
-        ))
-        story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
     # CCA FIELD VERIFICATION NOTES
@@ -1573,63 +1544,60 @@ def generate_producer_report(
     story.append(Spacer(1, 8))
 
     # --- Cover Crop Erosion Reduction ---
-    _sl_p = (
-        soil_loss_result.get("soil_loss_tons_ac_yr", 0)
-        if soil_loss_result and soil_loss_result.get("status_code") != "unavailable"
-        else None
-    )
-    _c_adj_p    = risk_result.get("c_factor", 0)
-    _res_mult_p = risk_result.get("residue_multiplier", 1.0)
-    _c_base_p   = 0.90 * _res_mult_p
-    if _sl_p is not None and _c_adj_p > 0 and _c_base_p > _c_adj_p:
-        _a_base_p  = _sl_p * (_c_base_p / _c_adj_p)
-        _pct_p     = (_c_base_p - _c_adj_p) / _c_base_p * 100
-        _a_saved_p = _a_base_p - _sl_p
-        # Area-weighted A_saved from zone_erosion_summary when available
-        _zes_p = risk_result.get("zone_erosion_summary", [])
-        _weighted_saved = (
-            sum(z["a_saved_zone"] * z["area_fraction"]
-                for z in _zes_p if z.get("a_saved_zone") is not None)
-            if _zes_p else None
+    _zes_p = risk_result.get("zone_erosion_summary", [])
+    if _zes_p:
+        _a_saved_weighted_p    = sum(
+            z["a_saved_zone"]    * z["area_fraction"]
+            for z in _zes_p if z.get("a_saved_zone") is not None
+        ) or None
+        _a_baseline_weighted_p = sum(
+            z["a_baseline_zone"] * z["area_fraction"]
+            for z in _zes_p if z.get("a_baseline_zone") is not None
+        ) or None
+        _pct_reduction_weighted_p = (
+            (_a_saved_weighted_p / _a_baseline_weighted_p) * 100
+            if _a_baseline_weighted_p else None
         )
-        _saved_label   = ("Est. Soil Saved (area-weighted, t/ac/yr)"
-                          if _weighted_saved is not None else "Saved")
-        _saved_display = (f"{_weighted_saved:.1f} t/ac/yr"
-                          if _weighted_saved is not None
-                          else f"{_a_saved_p:.1f} t/ac/yr")
-        cc_red_p = [
-            ["Est. Cover Crop Erosion Reduction", "Baseline (no cover)", _saved_label],
-            [
-                f"{_pct_p:.0f}% reduction",
-                f"{_a_base_p:.1f} t/ac/yr",
-                _saved_display,
-            ],
-        ]
-        cc_red_table_p = Table(
-            cc_red_p,
-            colWidths=[2.5 * inch, 2.0 * inch, 2.5 * inch],
-        )
-        cc_red_table_p.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
-            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
-            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-            ("FONTNAME",      (0, 1), (0, 1),   "Helvetica-Bold"),
-            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING",    (0, 0), (-1, -1), 4),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-        ]))
-        story.append(cc_red_table_p)
-        story.append(Paragraph(
-            f"<i>Estimated soil saved attributable to cover crop canopy. "
-            f"Area-weighted across Risk Index zones. Baseline and zone calculations detailed in CCA report. "
-            f"±10 pt uncertainty until residue multipliers are RUSLE2-validated.</i>",
-            small_style,
-        ))
-        story.append(Spacer(1, 8))
+        if _pct_reduction_weighted_p is not None:
+            cc_red_rows_p = [
+                ["Metric", "Value"],
+                [
+                    "Est. Cover Crop Erosion Reduction",
+                    f"{_pct_reduction_weighted_p:.1f}%",
+                ],
+                [
+                    "Baseline Soil Loss (no cover)",
+                    f"{_a_baseline_weighted_p:.1f} t/ac/yr",
+                ],
+                [
+                    "Est. Soil Saved (area-weighted)",
+                    f"{_a_saved_weighted_p:.1f} t/ac/yr",
+                ],
+            ]
+            cc_red_table_p = Table(
+                cc_red_rows_p,
+                colWidths=[2.5 * inch, 2.0 * inch],
+            )
+            cc_red_table_p.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+                ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+                ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+                ("FONTNAME",      (0, 1), (0, -1),  "Helvetica-Bold"),
+                ("ALIGN",         (1, 0), (1, -1),  "CENTER"),
+                ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+            ]))
+            story.append(cc_red_table_p)
+            story.append(Paragraph(
+                "<i>Estimates based on RUSLE C-factor methodology. Residue multipliers are not yet "
+                "RUSLE2-validated. ±10 pt uncertainty on reduction percentage.</i>",
+                small_style,
+            ))
+            story.append(Spacer(1, 8))
 
     # -----------------------------------------------------------------------
     # FOOTER

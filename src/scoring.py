@@ -360,15 +360,17 @@ def _compute_zone_erosion_summary(
         if pixel_count == 0:
             continue
 
-        mean_ndvi     = float(np.nanmean(ndvi_array[zone_mask]))
-        mean_ls       = float(np.nanmean(_analytical_ls_factor(slope_array[zone_mask])))
-        area_fraction = pixel_count / total_valid
+        mean_ndvi      = float(np.nanmean(ndvi_array[zone_mask]))
+        mean_ls        = float(np.nanmean(_analytical_ls_factor(slope_array[zone_mask])))
+        mean_slope_pct = float(np.nanmean(slope_array[zone_mask]))
+        area_fraction  = pixel_count / total_valid
 
         c_ndvi     = _lookup_c_factor(mean_ndvi)
         c_adj      = c_ndvi * residue_multiplier
         c_baseline = 0.90 * residue_multiplier
 
-        a_current_zone = r_factor * k * mean_ls * c_adj if k is not None else None
+        a_current_zone  = r_factor * k * mean_ls * c_adj      if k is not None else None
+        a_baseline_zone = r_factor * k * mean_ls * c_baseline if k is not None else None
 
         if k is not None and c_adj > 0 and c_baseline > c_adj:
             pct_reduction = (c_baseline - c_adj) / c_baseline * 100
@@ -378,15 +380,17 @@ def _compute_zone_erosion_summary(
             a_saved_zone  = None
 
         results.append({
-            "zone_label":     zone_label,
-            "mean_ndvi":      round(mean_ndvi, 3),
-            "c_adj":          round(c_adj, 3),
-            "c_baseline":     round(c_baseline, 3),
-            "mean_ls":        round(mean_ls, 2),
-            "a_current_zone": round(a_current_zone, 2) if a_current_zone is not None else None,
-            "pct_reduction":  round(pct_reduction, 1),
-            "a_saved_zone":   round(a_saved_zone, 2),
-            "area_fraction":  round(area_fraction, 4),
+            "zone_label":      zone_label,
+            "mean_ndvi":       round(mean_ndvi, 3),
+            "mean_slope_pct":  round(mean_slope_pct, 1),
+            "c_adj":           round(c_adj, 3),
+            "c_baseline":      round(c_baseline, 3),
+            "mean_ls":         round(mean_ls, 2),
+            "a_current_zone":  round(a_current_zone, 2)  if a_current_zone  is not None else None,
+            "a_baseline_zone": round(a_baseline_zone, 2) if a_baseline_zone is not None else None,
+            "pct_reduction":   round(pct_reduction, 1)   if pct_reduction   is not None else None,
+            "a_saved_zone":    round(a_saved_zone, 2)    if a_saved_zone    is not None else None,
+            "area_fraction":   round(area_fraction, 4),
         })
 
     return results
