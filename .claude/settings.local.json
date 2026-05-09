@@ -17,7 +17,13 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('src/report_generator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('report_generator.py OK'\\)\")",
       "Bash(python docs/generate_figures.py)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('src/scoring.py', encoding='utf-8'\\).read\\(\\)\\); print\\('scoring.py OK'\\)\")",
-      "Bash(python -m py_compile src/wss_utils.py src/io_utils.py)"
+      "Bash(python -m py_compile src/wss_utils.py src/io_utils.py)",
+      "Bash(python -c \"from src.scoring import _continuous_c_factor, _continuous_c_array, CONTINUOUS_C_PARAMS, RESIDUE_OPTIONS; import numpy as np; print\\('imports OK'\\); systems = list\\(CONTINUOUS_C_PARAMS.keys\\(\\)\\); assert systems == RESIDUE_OPTIONS, 'key mismatch'; print\\('keys match RESIDUE_OPTIONS'\\); ndvi_vals = [0.0, 0.21, 0.34, 0.65, 1.0]; sys = 'No-till corn \\(high residue ~80% cover\\)'; for v in ndvi_vals: c = _continuous_c_factor\\(v, sys\\); print\\(f'  NDVI={v:.2f}  C={c:.4f}'\\); arr = np.array\\([0.0, 0.21, 0.34, float\\('nan'\\), 0.65]\\); out = _continuous_c_array\\(arr, sys\\); print\\('array output:', [round\\(x,4\\) if not np.isnan\\(x\\) else 'NaN' for x in out]\\)\")",
+      "Bash(python compare_methods.py)",
+      "Bash(python test_scoring.py)",
+      "Bash(python _docx_update.py)",
+      "Bash(python _make_figure3.py)",
+      "Bash(del _docx_update.py _make_figure3.py)"
     ]
   }
 }

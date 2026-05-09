@@ -96,6 +96,34 @@ RESIDUE_ADJUSTMENTS = {
 RESIDUE_OPTIONS = list(RESIDUE_ADJUSTMENTS.keys())
 
 # ---------------------------------------------------------------------------
+# Continuous C-factor parameters — exponential decay model
+# C(NDVI) = floor + (intercept - floor) * exp(-k * NDVI)
+#   intercept : C-factor at NDVI=0 (failed cover crop, residue alone drives erosion)
+#   floor     : C-factor asymptote at high NDVI (excellent stand + residue system)
+#   k         : exponential decay constant (higher = faster benefit from early biomass)
+# Initial parameters based on published RUSLE2 value ranges for Iowa cropland.
+# Calibration against RUSLE2 Iowa State File runs (map units 100D2, 100E2, 100F2,
+# Monona silt loam) in progress — Shelby County NRCS (W. Dittmer, 2026).
+# Parameters subject to revision once RUSLE2 comparison data are available.
+# Keys match RESIDUE_OPTIONS exactly.
+# ---------------------------------------------------------------------------
+CONTINUOUS_C_PARAMS = {
+    "No-till corn (high residue ~80% cover)":         {"intercept": 0.05, "floor": 0.005, "k": 8},
+    "No-till soybeans (moderate residue — fragile)":  {"intercept": 0.10, "floor": 0.015, "k": 7},
+    "Tillage — > 30% residue (conservation tillage)": {"intercept": 0.25, "floor": 0.050, "k": 6},
+    "Tillage — < 30% residue (conventional tillage)": {"intercept": 0.45, "floor": 0.100, "k": 5},
+    "Unknown — not recorded (conservative default)":  {"intercept": 0.45, "floor": 0.100, "k": 5},
+}
+
+_CONTINUOUS_C_FALLBACK = "Tillage — < 30% residue (conventional tillage)"
+
+# NDVI threshold below which no living-cover credit is given — C = intercept (residue only).
+# Data: 15 Iowa field observations, five counties, three tillage systems, corn and soybean,
+# March–April 2026 Sentinel-2 L2A imagery. Mean bare/residue NDVI = 0.179, SD = 0.013.
+# Threshold set at mean + 0.5 SD. No significant difference by residue type or tillage found.
+UNIVERSAL_NDVI_BASELINE = 0.185
+
+# ---------------------------------------------------------------------------
 # Iowa R-factor zones — annual erosivity index (MJ·mm/ha·hr·yr)
 # Northwest Iowa counties use R=150; all remaining Iowa counties use R=175.
 # Source: Iowa NRCS FOTG Section I USLE Erosion Prediction,
@@ -245,6 +273,41 @@ def estimate_soil_loss(
     }
 
 
+def _continuous_c_factor(ndvi: float, residue_system: str) -> float:
+    """Piecewise exponential C-factor for a scalar NDVI value.
+
+    NDVI <= UNIVERSAL_NDVI_BASELINE:
+        C = intercept  (residue only — no living cover credit)
+    NDVI > UNIVERSAL_NDVI_BASELINE:
+        C = floor + (intercept - floor) * exp(-k * (NDVI - UNIVERSAL_NDVI_BASELINE))
+
+    Negative NDVI clamped to 0 (returns intercept).
+    Unknown residue_system falls back to conventional tillage (most conservative).
+    """
+    p    = CONTINUOUS_C_PARAMS.get(residue_system, CONTINUOUS_C_PARAMS[_CONTINUOUS_C_FALLBACK])
+    ndvi = max(0.0, float(ndvi))
+    if ndvi <= UNIVERSAL_NDVI_BASELINE:
+        return p["intercept"]
+    return p["floor"] + (p["intercept"] - p["floor"]) * np.exp(-p["k"] * (ndvi - UNIVERSAL_NDVI_BASELINE))
+
+
+def _continuous_c_array(ndvi_array: np.ndarray, residue_system: str) -> np.ndarray:
+    """Vectorized piecewise exponential C-factor for a pixel array.
+
+    NaN pixels propagate as NaN (np.where evaluates both branches but NaN in
+    the exponential branch propagates through; NaN <= threshold is False so
+    np.where selects the exponential branch, which is also NaN). Shape preserved.
+    """
+    p    = CONTINUOUS_C_PARAMS.get(residue_system, CONTINUOUS_C_PARAMS[_CONTINUOUS_C_FALLBACK])
+    ndvi = np.maximum(ndvi_array, 0.0)  # clamp negatives; np.maximum preserves NaN
+    return np.where(
+        ndvi <= UNIVERSAL_NDVI_BASELINE,
+        p["intercept"],
+        p["floor"] + (p["intercept"] - p["floor"]) * np.exp(-p["k"] * (ndvi - UNIVERSAL_NDVI_BASELINE)),
+    )
+
+
+# DEPRECATED — superseded by _continuous_c_factor(). Retained for compare_methods.py.
 def _lookup_c_factor(ndvi_mean: float) -> float:
     """Map mean NDVI to RUSLE C-factor using Iowa lookup table."""
     for (ndvi_min, ndvi_max), c_factor in IOWA_C_FACTOR_TABLE.items():
@@ -288,26 +351,17 @@ def _concern_level(rusle_score: float) -> str:
 def pixel_risk_index(
     ndvi_array: np.ndarray,
     slope_array: np.ndarray,
-    residue_multiplier: float = 1.0,
+    residue_system: str = "Unknown — not recorded (conservative default)",
 ) -> np.ndarray:
     """
-    Compute per-pixel RUSLE Risk Index (C x LS) for every pixel in the field.
-    Returns array of same shape as inputs.
-    C-factor derived from NDVI via Iowa lookup table, then scaled by
-    residue_multiplier to match field-level C-factor adjustment.
-    LS-factor derived from slope percent via simplified lookup.
+    Compute per-pixel RUSLE Risk Index (C × LS) for every pixel in the field.
+    Returns array of same shape as inputs. NaN propagates from either input.
+    C-factor from continuous exponential model (_continuous_c_array).
+    LS-factor from McCool et al. 1987 analytical formula (_analytical_ls_factor).
+    Old bin-based implementation preserved in pixel_level_concern() for compare_methods.py.
     """
-    c_array = np.full(ndvi_array.shape, np.nan, dtype=float)
-    c_array = np.where(ndvi_array < 0.15,                                    0.90, c_array)
-    c_array = np.where((ndvi_array >= 0.15) & (ndvi_array < 0.20),           0.75, c_array)
-    c_array = np.where((ndvi_array >= 0.20) & (ndvi_array < 0.35),           0.45, c_array)
-    c_array = np.where((ndvi_array >= 0.35) & (ndvi_array < 0.50),           0.20, c_array)
-    c_array = np.where((ndvi_array >= 0.50) & (ndvi_array < 0.65),           0.08, c_array)
-    c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
-    c_array = c_array * residue_multiplier
-
+    c_array  = _continuous_c_array(ndvi_array, residue_system)
     ls_array = _analytical_ls_factor(slope_array)
-
     risk_array = c_array * ls_array
     risk_array = np.where(
         np.isnan(ndvi_array) | np.isnan(slope_array), np.nan, risk_array
@@ -334,7 +388,7 @@ def _compute_zone_erosion_summary(
     ndvi_array: np.ndarray,
     slope_array: np.ndarray,
     zone_array: np.ndarray,
-    residue_multiplier: float,
+    residue_system: str,
     k_factor: Any,
     r_factor: float,
 ) -> list:
@@ -353,6 +407,8 @@ def _compute_zone_erosion_summary(
     if total_valid == 0:
         return []
 
+    c_baseline = _continuous_c_factor(0.0, residue_system)  # C at NDVI=0 = intercept
+
     results = []
     for zone_val, zone_label in zone_labels.items():
         zone_mask   = (zone_array == zone_val) & valid_mask
@@ -365,9 +421,7 @@ def _compute_zone_erosion_summary(
         mean_slope_pct = float(np.nanmean(slope_array[zone_mask]))
         area_fraction  = pixel_count / total_valid
 
-        c_ndvi     = _lookup_c_factor(mean_ndvi)
-        c_adj      = c_ndvi * residue_multiplier
-        c_baseline = 0.90 * residue_multiplier
+        c_adj = _continuous_c_factor(mean_ndvi, residue_system)
 
         a_current_zone  = r_factor * k * mean_ls * c_adj      if k is not None else None
         a_baseline_zone = r_factor * k * mean_ls * c_baseline if k is not None else None
@@ -449,9 +503,10 @@ def score_erosion_concern(
     Dict with keys:
         concern_level        : "Low" | "Moderate" | "High" | "Critical"
         score                : int 1–4
-        c_factor             : residue-adjusted C-factor
-        c_factor_unadjusted  : NDVI-only C-factor before residue adjustment
-        residue_multiplier   : float multiplier applied
+        c_factor             : C-factor from continuous exponential model
+        c_factor_baseline    : C at NDVI=0 for this residue system (the intercept)
+        c_factor_method      : "exponential_v2"
+        residue_multiplier   : legacy multiplier (retained for compare_methods.py reference)
         residue_system       : str label selected
         ls_factor            : mean-based LS-factor
         rusle_score          : adjusted C × LS
@@ -464,9 +519,9 @@ def score_erosion_concern(
     ndvi_mean  = ndvi_stats["mean"]
     slope_mean = slope_stats["mean"]
 
-    c_factor_unadjusted = _lookup_c_factor(ndvi_mean)
-    residue_multiplier  = RESIDUE_ADJUSTMENTS.get(residue_system, 1.00)
-    c_factor_adjusted   = c_factor_unadjusted * residue_multiplier
+    residue_multiplier = RESIDUE_ADJUSTMENTS.get(residue_system, 1.00)  # retained for compare_methods.py reference
+    c_factor_adjusted  = _continuous_c_factor(ndvi_mean, residue_system)
+    c_factor_baseline  = _continuous_c_factor(0.0,       residue_system)  # C at NDVI=0 = intercept
 
     ls_factor   = _lookup_ls_factor(slope_mean)
     rusle_score = c_factor_adjusted * ls_factor
@@ -486,8 +541,7 @@ def score_erosion_concern(
     zone_array_out = None
 
     if ndvi_array is not None and slope_array is not None:
-        raw_risk       = pixel_risk_index(ndvi_array, slope_array)
-        risk_array_out = raw_risk * residue_multiplier
+        risk_array_out = pixel_risk_index(ndvi_array, slope_array, residue_system)
         zone_array_out = classify_risk_zones(risk_array_out)
         valid_mask  = ~np.isnan(zone_array_out)
         valid_count = valid_mask.sum()
@@ -556,33 +610,36 @@ def score_erosion_concern(
             ndvi_array=ndvi_array,
             slope_array=slope_array,
             zone_array=zone_array_out,
-            residue_multiplier=residue_multiplier,
+            residue_system=residue_system,
             k_factor=k_factor,
             r_factor=r_factor,
         )
 
     return {
-        "concern_level":       concern,
-        "score":               score_int,
-        "c_factor":            round(c_factor_adjusted, 3),
-        "c_factor_unadjusted": round(c_factor_unadjusted, 3),
-        "residue_multiplier":  residue_multiplier,
-        "residue_system":      residue_system,
-        "ls_factor":           round(ls_factor, 2),
-        "rusle_score":         round(rusle_score, 3),
-        "risk_array":          risk_array_out,
-        "zone_array":          zone_array_out,
-        "zone_counts":         zone_counts_out,
+        "concern_level":        concern,
+        "score":                score_int,
+        "c_factor":             round(c_factor_adjusted, 3),
+        "c_factor_baseline":    round(c_factor_baseline, 3),
+        "c_factor_method":      "exponential_v2",
+        "residue_multiplier":   residue_multiplier,   # retained for compare_methods.py reference
+        "residue_system":       residue_system,
+        "ls_factor":            round(ls_factor, 2),
+        "rusle_score":          round(rusle_score, 3),
+        "risk_array":           risk_array_out,
+        "zone_array":           zone_array_out,
+        "zone_counts":          zone_counts_out,
         "zone_erosion_summary": zone_erosion_out,
-        "soil_loss":           soil_loss_result,
-        "low_cover":           ndvi_mean < ndvi_threshold,
-        "steep_slope":         slope_mean > slope_threshold,
-        "ndvi_threshold":      ndvi_threshold,
-        "slope_threshold":     slope_threshold,
-        "recommendation":      recommendations.get(concern, ""),
+        "soil_loss":            soil_loss_result,
+        "low_cover":            ndvi_mean < ndvi_threshold,
+        "steep_slope":          slope_mean > slope_threshold,
+        "ndvi_threshold":       ndvi_threshold,
+        "slope_threshold":      slope_threshold,
+        "recommendation":       recommendations.get(concern, ""),
     }
 
 
+# DEPRECATED — dead code (not called in current app). Superseded by pixel_risk_index().
+# Retained for compare_methods.py reference.
 def pixel_level_concern(
     ndvi_array: np.ndarray,
     slope_array: np.ndarray,

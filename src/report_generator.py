@@ -758,15 +758,11 @@ def generate_field_report(
                             color=MID_GRAY, spaceAfter=4))
     story.append(Paragraph("Field Level Results", section_style))
 
-    _c_adj   = risk_result.get("c_factor", 0)
-    _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
-    _c_mult  = risk_result.get("residue_multiplier", 1.0)
-    if _c_mult < 1.0:
-        _c_display = f"{_c_raw:.3f} \u2192 {_c_adj:.3f} (\u00d7{_c_mult:.2f} residue)"
-        _c_label   = "C-Factor (adj.)"
-    else:
-        _c_display = f"{_c_adj:.3f} (no residue adj.)"
-        _c_label   = "C-Factor (RUSLE)"
+    _c_adj     = risk_result.get("c_factor", 0)
+    _c_base    = risk_result.get("c_factor_baseline", _c_adj)
+    _c_pct     = int((_c_base - _c_adj) / _c_base * 100) if _c_base > 0 else 0
+    _c_display = f"{_c_adj:.3f} ({_c_pct}% reduction vs. baseline)"
+    _c_label   = "C-Factor (exp. model)"
 
     metrics = [
         ["Metric", "Value"],
@@ -1025,15 +1021,12 @@ def generate_field_report(
     footer_lines = [
         f"NDVI Source: Sentinel-2 via Google Earth Engine ({ndvi_date_str}) | "
         f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
-        "C-Factor methodology: Iowa RUSLE lookup table \u2014 "
-        "Laflen & Roose (1998), ISU Extension PM-1209. "
-        "This report is advisory only and does not constitute an official NRCS determination.",
-        "C-Factor residue adjustment: CoverMap applies a research-based multiplier to the NDVI-derived "
-        "C-factor to account for crop residue protection not captured by satellite imagery. "
-        "Multipliers are calibrated to Iowa tillage system residue levels per ISU Extension PM-1901 "
-        "and NRCS RUSLE2 Iowa State File guidance. This adjustment is an agronomic estimate requiring "
-        "validation against site-specific RUSLE2 runs. Default multiplier = 1.00 (no adjustment) "
-        "when tillage system is unknown.",
+        "C-Factor methodology: Continuous exponential model \u2014 "
+        "C(NDVI) = floor + (intercept \u2212 floor) \u00d7 exp(\u2212k \u00d7 NDVI). "
+        "Parameters derived from published RUSLE2 value ranges for Iowa cropland; residue system "
+        "context is baked into per-system intercept, floor, and k parameters. "
+        "Calibration against RUSLE2 Iowa State File runs in progress (Shelby County NRCS, W. Dittmer, 2026). "
+        "Parameters subject to revision. This report is advisory only and does not constitute an official NRCS determination.",
         f"CoverMap CCA Report \u00b7 {cca_name} \u00b7 Sentinel-2 via Google Earth Engine \u00b7 Iowa RUSLE C-factor calibration \u00b7 {report_date}",
     ]
     for line in footer_lines:
@@ -1513,15 +1506,11 @@ def generate_producer_report(
                             color=MID_GRAY, spaceAfter=4))
     story.append(Paragraph("Field Level Results", section_style))
 
-    _c_adj   = risk_result.get("c_factor", 0)
-    _c_raw   = risk_result.get("c_factor_unadjusted", _c_adj)
-    _c_mult  = risk_result.get("residue_multiplier", 1.0)
-    if _c_mult < 1.0:
-        _c_display = f"{_c_raw:.3f} → {_c_adj:.3f} (×{_c_mult:.2f} residue)"
-        _c_label   = "C-Factor (adj.)"
-    else:
-        _c_display = f"{_c_adj:.3f} (no residue adj.)"
-        _c_label   = "C-Factor (RUSLE)"
+    _c_adj     = risk_result.get("c_factor", 0)
+    _c_base    = risk_result.get("c_factor_baseline", _c_adj)
+    _c_pct     = int((_c_base - _c_adj) / _c_base * 100) if _c_base > 0 else 0
+    _c_display = f"{_c_adj:.3f} ({_c_pct}% reduction vs. baseline)"
+    _c_label   = "C-Factor (exp. model)"
 
     metrics = [
         ["Metric", "Value"],

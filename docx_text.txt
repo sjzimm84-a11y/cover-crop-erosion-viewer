@@ -32,8 +32,8 @@
 0031: GeoJSON polygon
 0032: Compute
 0033: NDVI + Residue system
-0034: C-factor lookup + residue multiplier
-0035: C-factor adjusted
+0034: NDVI + residue system → piecewise exponential C-factor model
+0035: C-factor (integrated residue system + NDVI)
 0036: Compute
 0037: DEM + Slope
 0038: LS-factor lookup (simplified, no slope length)
@@ -52,7 +52,7 @@
 0051: 2-page PDF report + SHP
 0052: 1.1 Plain-Language Risk Zone Summary
 0053: The diagram below shows how CoverMap combines the two primary inputs—cover crop thickness and slope steepness—to assign each 10m × 10m pixel on a field its erosion risk zone. This figure is intended for producer-facing presentations and field consultations.
-0054: Figure 1.1. How the erosion risk zone is determined. Each pixel’s risk color is computed by multiplying the satellite-derived C-factor (from NDVI) by the CCA-selected residue multiplier and the terrain LS-factor (from slope). Risk Index = C × Residue × LS.
+0054: Figure 1.1. How the erosion risk zone is determined. Each pixel’s risk color is computed by multiplying the satellite-derived C-factor (from NDVI and CCA-selected residue system) by the terrain LS-factor (from slope). Risk Index = C(NDVI, residue system) × LS.
 0055: [Risk Zone Diagram - Figure 1.1]
 0056: 2. Normalized Difference Vegetation Index (NDVI)
 0057: 2.1 Data Source and Collection
@@ -71,8 +71,8 @@
 0070: 3–5 days over Iowa
 0071: Two-satellite constellation
 0072: Date window
-0073: User-specified or rolling window. Minimum 7 days recommended
-0074: Iowa spring conditions
+0073: Default: Custom spring window (user-specified year, start date MM-DD, and end date MM-DD). Rolling window options: Last 7 days, Last 14 days, Last 30 days. Minimum 7 days recommended.
+0074: Default targets Iowa spring greenup period. Custom spring window recommended for accurate spring cover crop scoring.
 0075: Cloud filter — Stage 1
 0076: Scene-level: CLOUDY_PIXEL_PERCENTAGE < 80%
 0077: Scenes above threshold excluded
@@ -195,74 +195,47 @@
 0194: All other Iowa counties — includes Shelby, Pottawattamie, Harrison, Audubon, Carroll, and all central, east, and south Iowa counties. Majority of Iowa row crop acreage. Shelby County = R=175.
 0195: Source: Iowa NRCS FOTG Section I — USLE Erosion Prediction, Figure 2 (Rainfall Factors), Updated Electronically September 2002. R=175 reflects greater storm intensity from Gulf of Mexico moisture in central and eastern Iowa. CoverMap defaults to R=175 if county lookup fails — conservative for most Iowa fields. For formal conservation planning use the NRCS RUSLE2 Iowa State File which has location-specific values.
 0196: 5. C-Factor — Cover-Management Factor
-0197: 5.1 Iowa NDVI to C-Factor Lookup Table
-0198: The C-factor represents the effect of vegetation and management on erosion relative to a standard bare fallow plot. CoverMap derives C-factor from field-mean NDVI using a lookup table calibrated to Iowa cereal rye biomass thresholds.
-0199: Figure 3. NDVI → C-factor lookup (left) and residue adjustment multipliers (right).
-0200: NDVI Range
-0201: C-Factor
-0202: Biomass estimate
-0203: Stand quality
-0204: Reference
-0205: 0.00–0.15
-0206: 0.90
-0207: < 450 lb/acre
-0208: Failed / bare
-0209: Near bare-soil erosion rate per Laflen & Roose 1998
-0210: 0.15–0.20
-0211: 0.75
-0212: 450–900 lb/acre
-0213: Inadequate
-0214: Below erosion protection threshold, ISU Extension Cover Crops ICM
-0215: 0.20–0.35
-0216: 0.45
-0217: 900–2,200 lb/acre
-0218: Marginal
-0219: National cereal rye database median ~2,458 kg/ha
-0220: 0.35–0.50
-0221: 0.20
-0222: 2,200–3,100 lb/acre
-0223: Adequate
-0224: Research-based erosion protection benchmark
-0225: 0.50–0.65
-0226: 0.08
-0227: 3,100–4,000 lb/acre
-0228: Good
-0229: Strong canopy development, high biomass
-0230: 0.65–1.00
-0231: 0.03
-0232: > 4,000 lb/acre
-0233: Excellent
-0234: Near NDVI saturation — cannot differentiate above this
-0235: References: Laflen & Roose (1998); Iowa NRCS Technical Note Agronomy-4; ISU Extension Cover Crops ICM; Huddell et al. (2024) national cereal rye database (n=5,695 observations, mean 3,428 kg/ha).
-0236: 5.2 Residue Adjustment — CCA Input
-0237: C_adjusted = C_NDVI × residue_multiplier
-0238: Applied per-pixel before Risk Index computation
-0239: Satellite NDVI measures living vegetation biomass but cannot detect crop residue on the soil surface. A no-till corn field with 80% residue cover has substantially lower effective C-factor than a conventionally tilled field with the same NDVI. The CCA selects the previous crop and tillage system from a dropdown; CoverMap applies a validated adjustment multiplier.
-0240: Residue System
-0241: Multiplier
-0242: Rationale
-0243: Effective C (NDVI=0.18)
-0244: No-till corn (~80% residue)
-0245: × 0.30
-0246: Corn stover at 80% cover provides C=0.10–0.15 independently. ISU Extension PM-1901
-0247: 0.225
-0248: No-till soybeans (~60% residue)
-0249: × 0.55
-0250: Soybean residue fragile — deteriorates rapidly over Iowa winter. Much less available by spring.
-0251: 0.413
-0252: Conservation tillage (>30% residue)
-0253: × 0.75
-0254: Chisel plow/vertical till typically leaves 35–70% residue. NRCS conservation tillage definition.
-0255: 0.563
-0256: Conventional tillage (<30% residue)
-0257: × 1.00
-0258: Moldboard plow leaves 0–15% residue. Near bare-soil baseline. NDVI C-factor applies directly.
-0259: 0.750
-0260: Unknown — not recorded (default)
-0261: × 1.00
-0262: Conservative default — assumes no residue benefit. Errs toward overstating risk, not understating it.
-0263: 0.750
-0264: ⚠️ VALIDATION REQUIRED: Residue multipliers are agronomically-derived estimates based on literature residue cover percentages and CCA professional judgment. They have not been validated against RUSLE2 Iowa State File runs for each scenario. Planned validation: compare CoverMap adjusted C-factors against RUSLE2 outputs for 6–8 Iowa field scenarios using Monona silt loam K=0.37. Contact: ISU Extension Agronomy for RUSLE2 Iowa State File access.
+0197: 5.1 Piecewise Exponential C-Factor Model
+0198: The C-factor represents the effect of vegetation and management on erosion relative to a standard bare fallow plot. CoverMap derives C-factor from field-mean NDVI using a piecewise exponential model parameterized by the CCA-selected residue system. A universal NDVI baseline threshold (UNIVERSAL_NDVI_BASELINE = 0.185) separates the residue-only regime from the living-cover regime. Below this threshold, C equals the residue-system intercept — no credit is given for living vegetation. Above the threshold, C decays exponentially toward an asymptotic floor as NDVI increases. The baseline was derived from 15 Iowa field observations (five counties, three tillage systems, corn and soybean, March–April 2026 Sentinel-2 L2A imagery; mean = 0.179, SD = 0.013; threshold set at mean + 0.5 SD). No significant difference in baseline by residue type or tillage was found.
+0199: Figure 3. Piecewise exponential C-factor curves by residue system. C is flat at the intercept for NDVI ≤ 0.185 (residue-only zone, left of dashed line — no living-cover credit). Above the threshold, C decays exponentially toward the floor asymptote. Higher residue systems (no-till corn) start lower and decay faster; conventional tillage starts higher and decays more slowly.
+0200: [Figure 3 — Piecewise exponential C-factor curves by residue system]
+0201: Model formula:
+0202: C(NDVI) = intercept                                                                  [NDVI ≤ 0.185]
+0203: C(NDVI) = floor + (intercept − floor) × exp(−k × (NDVI − 0.185))   [NDVI > 0.185]
+0204: Residue System
+0205: intercept
+0206: floor
+0207: k
+0208: Interpretation
+0209: No-till corn (high residue ~80% cover)
+0210: 0.05
+0211: 0.005
+0212: 8
+0213: Strong residue protection at NDVI=0; rapid canopy benefit above baseline
+0214: No-till soybeans (moderate residue — fragile)
+0215: 0.10
+0216: 0.015
+0217: 7
+0218: Moderate residue protection; fragile bean residue deteriorates over Iowa winter
+0219: Tillage — > 30% residue (conservation tillage)
+0220: 0.25
+0221: 0.050
+0222: 6
+0223: Partial residue coverage; substantial erosion reduction possible with good stand
+0224: Tillage — < 30% residue (conventional tillage)
+0225: 0.45
+0226: 0.100
+0227: 5
+0228: Near bare-soil baseline at low NDVI; high erosion risk without established cover crop
+0229: Unknown — not recorded (conservative default)
+0230: 0.45
+0231: 0.100
+0232: 5
+0233: Same parameters as conventional tillage — conservative default, errs toward overstating risk
+0234: Parameters are initial estimates based on published RUSLE2 value ranges for Iowa cropland. Calibration against RUSLE2 Iowa State File runs (Monona silt loam map units 100D2, 100E2, 100F2; Shelby County NRCS, W. Dittmer) is in progress. Parameters subject to revision once RUSLE2 comparison data are available.
+0235: 5.2 Residue System — CCA Input
+0236: The CCA selects the previous crop and tillage system from a dropdown. This selection determines which row of the exponential model parameter table (Section 5.1) is used for all C-factor computations on that field. Unlike the prior model, there is no separate residue multiplier step — the residue system selection directly controls the intercept, floor, and k parameters of the C-factor curve. The C-factor at NDVI=0 (the intercept) represents the residue-only erosion rate for that tillage system with no living cover crop present; this value also serves as C_baseline in erosion reduction calculations (Section 7.5).
+0237: ⚠️ PRE-CALIBRATION: Exponential model parameters are initial estimates based on published RUSLE2 value ranges for Iowa cropland. They have not yet been validated against RUSLE2 Iowa State File runs. Planned validation: compare CoverMap C-factors against RUSLE2 outputs for representative Iowa fields (Monona silt loam K=0.37) in coordination with Shelby County NRCS (W. Dittmer, 2026) and ISU Extension (M. Licht). Parameters subject to revision following RUSLE2 comparison.
 0265: 6. LS-Factor and Risk Index (C×LS)
 0266: 6.1 LS-Factor — Simplified Lookup from Slope
 0267: The LS-factor combines slope length (L) and slope steepness (S) effects on erosion. True RUSLE2 LS-factor requires flow accumulation analysis to determine slope length. CoverMap uses a simplified per-pixel lookup from slope percent only — slope length is not computed.
@@ -370,9 +343,9 @@
 0369: No flow-accumulation slope length — see Section 6.1
 0370: C
 0371: Cover-management
-0372: NDVI lookup + residue multiplier
+0372: Piecewise exponential C-factor model (NDVI + residue system params)
 0373: 0.03–0.90
-0374: Multipliers need RUSLE2 validation
+0374: Model parameters pre-calibration; RUSLE2 comparison in progress (W. Dittmer, Shelby County NRCS, 2026)
 0375: P
 0376: Support practices
 0377: Assumed P = 1.0 (none)
@@ -411,7 +384,7 @@
 0410: Assumed 100m — continuous S-factor applied per pixel (v1.5)
 0411: C-factor
 0412: Computed daily through crop stage periods with detailed residue sub-factors
-0413: Single NDVI observation with four-category residue multiplier
+0413: Single NDVI observation; piecewise exponential model with per-residue-system parameters (intercept, floor, k)
 0414: Deposition
 0415: Explicitly computed on concave toeslopes — sediment that deposits before leaving field is credited
 0416: Not computed — all detached sediment assumed to leave field
@@ -420,35 +393,59 @@
 0419: CoverMap field average almost always LOWER than RUSLE2 for same field
 0420: Practical implication: If a CCA presents a CoverMap report showing A = 47 tons/ac/yr and an NRCS conservationist runs RUSLE2 on the same field and gets 180 tons/ac/yr, this is expected — not a bug. CoverMap averages the whole field including flat toeslopes. RUSLE2 focuses on the steepest slope segment. Both are correct for what they measure. The CoverMap report disclaimer explicitly states: “CoverMap estimates field-average soil loss. RUSLE2 evaluates the dominant critical area. RUSLE2 outputs will be higher than CoverMap estimates for the same field.”
 0421: 7.5 Cover Crop Erosion Reduction
-0422: CoverMap v1.5 adds a 4th metric to the soil loss assessment section in all output formats (Streamlit app, CCA technical report, and producer summary). This metric quantifies the erosion protection benefit of the observed cover crop stand compared to a baseline scenario with no cover crop planted.
+0422: CoverMap provides per-zone and field-level erosion reduction estimates in a dedicated "Erosion Reduction by Risk Zone" section, displayed separately from the Estimated Soil Loss vs. Soil Loss Tolerance section in all output formats (Streamlit app, CCA technical report, and producer summary). This section quantifies the erosion protection benefit of the observed cover crop stand compared to a baseline scenario with no cover crop planted.
 0423: % Erosion Reduction = (C_baseline - C_factor_adjusted) / C_baseline × 100
-0424: Where C_baseline = 0.90 × residue_multiplier represents the same tillage system with no cover crop planted. Because R, K, and LS factors remain constant between scenarios, the percentage reduction simplifies to a pure C-factor ratio comparison.
+0424: Where C_baseline = the C-factor intercept for the selected residue system — i.e., C(NDVI=0) from the piecewise exponential model (Section 5.1). This represents the same tillage system with no living cover crop planted (residue only). Because R, K, and LS factors remain constant between scenarios, the percentage reduction simplifies to a pure C-factor ratio comparison.
 0425: 7.6 Calculation Method
 0426: Parameter
 0427: Formula
 0428: Example (No-till corn, NDVI=0.25)
 0429: C_baseline
-0430: 0.90 × residue_multiplier
-0431: 0.90 × 0.30 = 0.27
+0430: C-factor intercept for residue system (NDVI=0)
+0431: No-till corn intercept = 0.05
 0432: C_factor_adjusted
-0433: NDVI lookup × residue_multiplier
-0434: 0.45 × 0.30 = 0.135
+0433: _continuous_c_factor(NDVI, residue_system)
+0434: _continuous_c_factor(0.25, "No-till corn") = 0.011
 0435: A_baseline
 0436: Current soil loss × (C_baseline / C_factor_adjusted)
-0437: 12 t/ac/yr × (0.27 / 0.135) = 24 t/ac/yr
+0437: 12 t/ac/yr × (0.05 / 0.011) = 55 t/ac/yr
 0438: % Reduction
 0439: (C_baseline - C_factor_adjusted) / C_baseline × 100
-0440: (0.27 - 0.135) / 0.27 × 100 = 50%
+0440: (0.05 − 0.011) / 0.05 × 100 = 78%
 0441: 7.7 Display Format
-0442: The erosion reduction metric appears as a 3-column table row in the 'Estimated Soil Loss vs. Soil Loss Tolerance' section:
-0443: Metric
-0444: Baseline (no cover)
-0445: Current / Saved
-0446: Est. Cover Crop Erosion Reduction
-0447: 24.0 tons/ac/yr
-0448: 12.0 tons/ac/yr (50% reduction)
-0449: Validation Status: Residue multipliers are not yet RUSLE2-validated (HIGH priority limitation). The erosion reduction estimate inherits this ±10% uncertainty directly. Baseline assumption: same tillage system, no cover crop planted. For official conservation planning use NRCS RUSLE2 Iowa State File.
-0450: This metric provides CCAs and producers with a concrete, quantified estimate of the erosion protection benefit achieved by establishing cover crops. The baseline comparison enables economic justification for cover crop investments and supports EQIP conservation practice documentation.
+0442: Erosion reduction is displayed in a dedicated "Erosion Reduction by Risk Zone" section, separate from the Estimated Soil Loss vs. Soil Loss Tolerance section. The table shows a per-zone breakdown for each risk zone present on the field (Low, Moderate, High, Critical), with a field-level area-weighted footer row.
+0443: Column
+0444: Computation
+0445: Notes
+0446: Risk Zone
+0447: Zone label from C×LS classification (Low / Moderate / High / Critical)
+0448: Only zones with at least one valid pixel are shown
+0449: Zone Area (%)
+0449a: area_fraction × 100 — fraction of total valid field pixels in each zone
+0449b: Derived from pixel count within zone / total valid pixels
+0449c: Mean Slope (%)
+0449d: Mean pixel slope within zone, computed from Iowa 3m DEM
+0449e: Resampled to 10m NDVI grid before zone assignment
+0449f: Mean NDVI
+0449g: Mean pixel NDVI within zone from Sentinel-2 composite
+0449h: Used as input to piecewise exponential C-factor model
+0449i: C-factor
+0449j: Zone-mean C-factor: _continuous_c_factor(mean_ndvi, residue_system) from piecewise exponential model
+0449k: Same model as Section 5.1; curve parameters from CONTINUOUS_C_PARAMS keyed to CCA-selected residue system
+0449l: Mean LS
+0449m: Zone-mean LS-factor: mean of per-pixel _analytical_ls_factor(slope%) across zone
+0449n: McCool et al. 1987 continuous formula, 100m assumed slope length (see Section 6.1)
+0449o: Est. Soil Loss (t/ac/yr)
+0449p: A = R × K × mean_LS × C_adj for zone. K from SSURGO; R from Iowa 2-zone lookup
+0449q: "K unavail." if SSURGO K-factor not returned. Field (area-weighted) row: sum(a_current_zone × area_fraction for each zone)
+0449r: Est. Reduction (%)
+0449s: (C_baseline − C_adj) / C_baseline × 100 per zone
+0449t: Same formula as Section 7.5. C_baseline = exponential model intercept for residue system (C at NDVI=0; see Section 5.1)
+0449u: Est. Soil Saved (t/ac/yr)
+0449v: R × K × mean_LS × (C_baseline − C_adj) per zone
+0449w: Field (area-weighted) row: sum(a_saved_zone × area_fraction for each zone)
+0450: Validation Status: Exponential model parameters are pre-calibration estimates (HIGH priority limitation). The erosion reduction estimate inherits this uncertainty directly. Baseline assumption: same tillage system, no living cover crop (residue only). Planned validation: RUSLE2 Iowa State File comparison (W. Dittmer, Shelby County NRCS; M. Licht, ISU Extension, 2026). For official conservation planning use NRCS RUSLE2 Iowa State File.
+0450a: This table provides CCAs and producers with zone-specific and field-average estimates of the erosion protection benefit achieved by establishing cover crops. The per-zone breakdown identifies which landscape positions carry the most risk and quantifies the benefit in those zones independently. The area-weighted footer summarizes field-level performance.
 0451: 8. Zone Summary Tables — Outputs
 0452: 8.1 NDVI Zone Summary Table
 0453: The NDVI zone table is computed from the clipped NDVI array using boundary-masked pixels only. Acreage is computed from pixel count × pixel area (10m × 10m = 100m² = 0.0247 acres per pixel).

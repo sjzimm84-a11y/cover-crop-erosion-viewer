@@ -28,7 +28,6 @@ from src.scoring import (
     classify_risk_zones,
     compute_ndvi_zone_summary,
     RESIDUE_OPTIONS,
-    RESIDUE_ADJUSTMENTS,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report, generate_producer_report
@@ -516,7 +515,7 @@ if "r_factor_note" not in st.session_state:
 # Use residue-adjusted C-factor for map — matches table computation
 _risk_index_array = pixel_risk_index(
     ndvi_array, slope_percent,
-    residue_multiplier=RESIDUE_ADJUSTMENTS.get(residue_system, 1.0)
+    residue_system=residue_system
 )
 _risk_zone_preview = classify_risk_zones(_risk_index_array)
 
@@ -938,17 +937,12 @@ except (TypeError, ValueError):
     c7.metric("Soil K-Factor", "N/A",
               help=f"Soil series: {_soil_series} — K-factor not returned from SSURGO")
 
-if risk_result["residue_multiplier"] < 1.0:
-    st.caption(
-        f"C-Factor adjusted from {risk_result['c_factor_unadjusted']:.3f} to "
-        f"{risk_result['c_factor']:.3f} "
-        f"({int((1 - risk_result['residue_multiplier']) * 100)}% reduction for residue — "
-        f"{residue_system})"
-    )
-else:
-    st.caption(
-        "C-Factor: no residue adjustment applied (unknown or conventional tillage)"
-    )
+_c_base = risk_result.get("c_factor_baseline", risk_result["c_factor"])
+_c_pct  = int((_c_base - risk_result["c_factor"]) / _c_base * 100) if _c_base > 0 else 0
+st.caption(
+    f"C-Factor {risk_result['c_factor']:.3f} — {_c_pct}% reduction vs. no-cover baseline "
+    f"({residue_system}). Exponential model, pre-calibration."
+)
 
 if ndvi_stats["mean"] > 0.75:
     st.warning(
