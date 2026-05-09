@@ -604,10 +604,13 @@ if _zone_erosion_summary:
     _ws = sum(z["a_saved_zone"]    * z["area_fraction"] for z in _zone_erosion_summary if z["a_saved_zone"]    is not None)
     _wb = sum(z["a_baseline_zone"] * z["area_fraction"] for z in _zone_erosion_summary if z["a_baseline_zone"] is not None)
     _wc = sum(z["a_current_zone"]  * z["area_fraction"] for z in _zone_erosion_summary if z["a_current_zone"]  is not None)
-    _a_saved_weighted    = _ws or None
-    _a_baseline_weighted = _wb or None
-    _a_current_weighted  = _wc or None
-    if _a_baseline_weighted:
+    _any_s = any(z["a_saved_zone"]    is not None for z in _zone_erosion_summary)
+    _any_b = any(z["a_baseline_zone"] is not None for z in _zone_erosion_summary)
+    _any_c = any(z["a_current_zone"]  is not None for z in _zone_erosion_summary)
+    _a_saved_weighted    = _ws if _any_s else None
+    _a_baseline_weighted = _wb if _any_b else None
+    _a_current_weighted  = _wc if _any_c else None
+    if _a_baseline_weighted and _a_saved_weighted is not None:
         _pct_reduction_weighted = (_a_saved_weighted / _a_baseline_weighted) * 100
 
 # Hoist image date string — used in Section 4 and PDF call

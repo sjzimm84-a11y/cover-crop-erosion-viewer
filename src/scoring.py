@@ -426,7 +426,9 @@ def _compute_zone_erosion_summary(
         a_current_zone  = r_factor * k * mean_ls * c_adj      if k is not None else None
         a_baseline_zone = r_factor * k * mean_ls * c_baseline if k is not None else None
 
-        if k is not None and c_adj > 0 and c_baseline > c_adj:
+        if k is not None and c_baseline > 0:
+            # >= handles the flat region (NDVI <= UNIVERSAL_NDVI_BASELINE)
+            # where c_adj == c_baseline and saving is legitimately zero
             pct_reduction = (c_baseline - c_adj) / c_baseline * 100
             a_saved_zone  = r_factor * k * mean_ls * (c_baseline - c_adj)
         else:
