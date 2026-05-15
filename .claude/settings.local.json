@@ -23,7 +23,9 @@
       "Bash(python test_scoring.py)",
       "Bash(python _docx_update.py)",
       "Bash(python _make_figure3.py)",
-      "Bash(del _docx_update.py _make_figure3.py)"
+      "Bash(del _docx_update.py _make_figure3.py)",
+      "Bash(pip install *)",
+      "Bash(python *)"
     ]
   }
 }

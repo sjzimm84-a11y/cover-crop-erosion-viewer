@@ -884,9 +884,8 @@ def generate_field_report(
         _zt.setStyle(_zt_style)
         story.append(_zt)
         story.append(Paragraph(
-            "<i>Identical reduction percentages across zones indicate shared C-factor bin "
-            "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation. "
-            "Residue multipliers not yet RUSLE2-validated. ±10 pt uncertainty.</i>",
+            "<i>Reduction percentages reflect per-zone C-factor from the piecewise exponential NDVI model. "
+            "Absolute soil loss differs by zone due to LS variation. ±10 pt uncertainty on reduction percentage.</i>",
             small_style,
         ))
         story.append(Spacer(1, 6))
@@ -1591,8 +1590,8 @@ def generate_producer_report(
             ]))
             story.append(cc_red_table_p)
             story.append(Paragraph(
-                "<i>Estimates based on RUSLE C-factor methodology. Residue multipliers are not yet "
-                "RUSLE2-validated. ±10 pt uncertainty on reduction percentage.</i>",
+                "<i>Estimates based on RUSLE C-factor methodology. C-factor derived from piecewise "
+                "exponential NDVI model. ±10 pt uncertainty on reduction percentage.</i>",
                 small_style,
             ))
             story.append(Spacer(1, 8))
@@ -1606,8 +1605,8 @@ def generate_producer_report(
     footer_lines = [
         f"NDVI Source: Sentinel-2 via Google Earth Engine ({ndvi_date_str}) | "
         f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
-        "C-Factor methodology: Iowa RUSLE lookup table — "
-        "Laflen & Roose (1998), ISU Extension PM-1209. "
+        "C-Factor methodology: piecewise exponential NDVI model — "
+        "continuous C-factor differentiated by residue system. "
         "This report is advisory only and does not constitute an official NRCS determination.",
         f"CoverMap Field Report · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
     ]

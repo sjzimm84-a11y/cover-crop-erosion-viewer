@@ -853,9 +853,8 @@ if _zone_erosion_summary:
         use_container_width=True,
     )
     st.caption(
-        "Identical reduction percentages across zones indicate shared C-factor bin "
-        "in the stepped NDVI lookup table. Absolute soil loss differs by zone due to LS variation. "
-        "Residue multipliers not yet RUSLE2-validated. ±10 pt uncertainty."
+        "Reduction percentages reflect per-zone C-factor from the piecewise exponential NDVI model. "
+        "Absolute soil loss differs by zone due to LS variation. ±10 pt uncertainty on reduction percentage."
     )
 
 # === SECTION 4: COVER CROP STAND ASSESSMENT ===
