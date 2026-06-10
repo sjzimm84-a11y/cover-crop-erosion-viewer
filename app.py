@@ -196,9 +196,11 @@ with st.sidebar:
     slope_opacity = st.slider("Slope opacity", 0.0, 1.0, 0.1, 0.1)
 
 # ---------------------------------------------------------------------------
-# Temp dir
+# Temp dir — persisted in session state so reruns reuse the same directory
 # ---------------------------------------------------------------------------
-temp_dir = Path(tempfile.mkdtemp())
+if "temp_dir" not in st.session_state:
+    st.session_state.temp_dir = Path(tempfile.mkdtemp())
+temp_dir = st.session_state.temp_dir
 
 boundary_path = None
 ndvi_path     = None
@@ -473,9 +475,11 @@ except Exception:
 # ---------------------------------------------------------------------------
 try:
     from src.scoring import get_iowa_r_factor
-    _r_factor, _r_factor_note = get_iowa_r_factor(field_boundary)
+    _r_factor, _r_factor_note, _county_display = get_iowa_r_factor(field_boundary)
     st.session_state.r_factor      = _r_factor
     st.session_state.r_factor_note = _r_factor_note
+    if _county_display:
+        st.session_state.county_name = _county_display
 except Exception:
     st.session_state.r_factor      = 175.0
     st.session_state.r_factor_note = "R=175 (default — county lookup failed, standard Iowa)"
@@ -510,6 +514,8 @@ if "r_factor" not in st.session_state:
     st.session_state.r_factor = 175.0
 if "r_factor_note" not in st.session_state:
     st.session_state.r_factor_note = "R=175 (standard Iowa zone)"
+if "county_name" not in st.session_state:
+    st.session_state.county_name = None
 
 
 # Use residue-adjusted C-factor for map — matches table computation
@@ -1004,7 +1010,10 @@ with col_a:
 with col_b:
     pdf_farm_name  = st.text_input("Farm name",  value="")
 with col_c:
-    pdf_county     = st.text_input("County",     value="Shelby County, IA")
+    pdf_county = st.text_input(
+        "County",
+        value=st.session_state.county_name or "Shelby County, IA",
+    )
 
 col_d, col_e, col_f = st.columns(3)
 with col_d:

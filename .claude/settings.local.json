@@ -25,7 +25,11 @@
       "Bash(python _make_figure3.py)",
       "Bash(del _docx_update.py _make_figure3.py)",
       "Bash(pip install *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(wc -l \"/mnt/c/Users/User/Python code/cover_crop_erosion_viewer/covermap_explainer_v2.html\")",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\User\\\\Python code\\\\cover_crop_erosion_viewer\\\\covermap_explainer_v2.html\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(python -c \"import playwright; print\\('playwright ok'\\)\" 2>&1)",
+      "PowerShell(python -c \"import selenium; print\\('selenium ok'\\)\" 2>&1)"
     ]
   }
 }

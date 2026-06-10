@@ -61,7 +61,7 @@ def build_map_with_rasters(
     COLOR_GOOD     = np.array([250, 204,  21, 255], dtype=np.uint8)  # #FACC15 bright yellow
     COLOR_NODATA   = np.array([  0,   0,   0,   0], dtype=np.uint8)  # transparent
 
-    ndvi_clean = ndvi_array.copy().astype(float)
+    ndvi_clean = ndvi_array.astype(float)
     ndvi_clean[ndvi_clean <= -9999] = np.nan
     valid_pixels = ndvi_clean[~np.isnan(ndvi_clean)]
 
@@ -94,7 +94,7 @@ def build_map_with_rasters(
 
     # --- Slope: RdYlBu reversed (dark red=steep, blue=flat) ---
     # Higher contrast than YlOrRd — agronomically steep slopes show as red
-    slope_clean = slope_array.copy().astype(float)
+    slope_clean = slope_array.astype(float)
     slope_clean[slope_clean <= -9999] = np.nan
     slope_valid = slope_clean[~np.isnan(slope_clean)]
 

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoverMap — Field Report Intake</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f4f6f4; }
+    .intake-card { max-width: 680px; margin: 2rem auto 3rem; }
+    .required-marker { color: #dc3545; }
+    .field-hint { font-size: 0.82rem; color: #6c757d; margin-top: 0.25rem; }
+    pre.payload-display {
+      background: #1e2320;
+      color: #b2c9b0;
+      border-radius: 6px;
+      padding: 1rem;
+      font-size: 0.78rem;
+      max-height: 420px;
+      overflow-y: auto;
+    }
+    .card-header { background-color: #3d6b3a; }
+  </style>
+</head>
+<body>
+<div class="container intake-card">
+  <div class="card shadow-sm">
+
+    <div class="card-header text-white py-3">
+      <h4 class="mb-0">CoverMap &mdash; Field Report Intake</h4>
+    </div>
+
+    <div class="card-body px-4 py-4">
+
+    {% if success %}
+
+      <div class="alert alert-success mb-3">
+        <h5 class="alert-heading">Submission Received</h5>
+        <p class="mb-0">Your intake request has been logged. Payload recorded to server console:</p>
+      </div>
+      <pre class="payload-display">{{ payload | tojson(indent=2) }}</pre>
+      <a href="/" class="btn btn-outline-success mt-3">Submit Another Request</a>
+
+    {% else %}
+
+      {% if errors %}
+      <div class="alert alert-danger py-2 mb-4">
+        Please correct the highlighted fields before submitting.
+      </div>
+      {% endif %}
+
+      <form method="POST" enctype="multipart/form-data" novalidate>
+
+        <!-- Requestor Name -->
+        <div class="mb-3">
+          <label for="requestor_name" class="form-label fw-semibold">
+            Requestor Name <span class="required-marker">*</span>
+          </label>
+          <input type="text"
+                 class="form-control{% if errors.requestor_name %} is-invalid{% endif %}"
+                 id="requestor_name" name="requestor_name"
+                 value="{{ form_data.requestor_name if form_data else '' }}"
+                 autocomplete="name">
+          {% if errors.requestor_name %}
+          <div class="invalid-feedback">{{ errors.requestor_name }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Email -->
+        <div class="mb-3">
+          <label for="email" class="form-label fw-semibold">
+            Email <span class="required-marker">*</span>
+          </label>
+          <input type="email"
+                 class="form-control{% if errors.email %} is-invalid{% endif %}"
+                 id="email" name="email"
+                 value="{{ form_data.email if form_data else '' }}"
+                 autocomplete="email">
+          {% if errors.email %}
+          <div class="invalid-feedback">{{ errors.email }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Farm Name -->
+        <div class="mb-3">
+          <label for="farm_name" class="form-label fw-semibold">Farm Name</label>
+          <input type="text" class="form-control" id="farm_name" name="farm_name"
+                 value="{{ form_data.farm_name if form_data else '' }}">
+          <div class="field-hint">Optional</div>
+        </div>
+
+        <!-- Previous Crop -->
+        <div class="mb-3">
+          <label for="previous_crop" class="form-label fw-semibold">
+            Previous Crop <span class="required-marker">*</span>
+          </label>
+          <select class="form-select{% if errors.previous_crop %} is-invalid{% endif %}"
+                  id="previous_crop" name="previous_crop">
+            <option value="">— Select —</option>
+            <option value="Corn"
+              {% if form_data and form_data.previous_crop == 'Corn' %}selected{% endif %}>Corn</option>
+            <option value="Soybeans"
+              {% if form_data and form_data.previous_crop == 'Soybeans' %}selected{% endif %}>Soybeans</option>
+          </select>
+          {% if errors.previous_crop %}
+          <div class="invalid-feedback">{{ errors.previous_crop }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Tillage Practice -->
+        <div class="mb-3">
+          <label for="tillage_practice" class="form-label fw-semibold">
+            Tillage Practice <span class="required-marker">*</span>
+          </label>
+          <select class="form-select{% if errors.tillage_practice %} is-invalid{% endif %}"
+                  id="tillage_practice" name="tillage_practice">
+            <option value="">— Select —</option>
+            <option value="No-till"
+              {% if form_data and form_data.tillage_practice == 'No-till' %}selected{% endif %}>No-till</option>
+            <option value="Conservation tillage"
+              {% if form_data and form_data.tillage_practice == 'Conservation tillage' %}selected{% endif %}>Conservation tillage</option>
+            <option value="Conventional tillage"
+              {% if form_data and form_data.tillage_practice == 'Conventional tillage' %}selected{% endif %}>Conventional tillage</option>
+          </select>
+          {% if errors.tillage_practice %}
+          <div class="invalid-feedback">{{ errors.tillage_practice }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Termination Date -->
+        <div class="mb-3">
+          <label for="termination_date" class="form-label fw-semibold">Termination Date</label>
+          <input type="date"
+                 class="form-control{% if errors.termination_date %} is-invalid{% endif %}"
+                 id="termination_date" name="termination_date"
+                 value="{{ form_data.termination_date if form_data else '' }}">
+          {% if errors.termination_date %}
+          <div class="invalid-feedback">{{ errors.termination_date }}</div>
+          {% endif %}
+          <div class="field-hint">Optional — expected cover crop termination date</div>
+        </div>
+
+        <!-- Report Type -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">
+            Report Type <span class="required-marker">*</span>
+          </label>
+          {% if errors.report_type %}
+          <div class="text-danger small mb-1">{{ errors.report_type }}</div>
+          {% endif %}
+          <div class="d-flex gap-4">
+            <div class="form-check">
+              <input class="form-check-input" type="radio"
+                     name="report_type" id="rt_producer" value="Producer"
+                     {% if form_data and form_data.report_type == 'Producer' %}checked{% endif %}
+                     onchange="toggleCCAField(this.value)">
+              <label class="form-check-label" for="rt_producer">Producer</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio"
+                     name="report_type" id="rt_cca" value="CCA"
+                     {% if form_data and form_data.report_type == 'CCA' %}checked{% endif %}
+                     onchange="toggleCCAField(this.value)">
+              <label class="form-check-label" for="rt_cca">CCA</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- CCA Name (conditional) -->
+        <div class="mb-3" id="cca_name_group"
+             style="display: {% if form_data and form_data.report_type == 'CCA' %}block{% else %}none{% endif %};">
+          <label for="cca_name" class="form-label fw-semibold">
+            CCA Name <span class="required-marker">*</span>
+          </label>
+          <input type="text"
+                 class="form-control{% if errors.cca_name %} is-invalid{% endif %}"
+                 id="cca_name" name="cca_name"
+                 value="{{ form_data.cca_name if form_data else '' }}">
+          {% if errors.cca_name %}
+          <div class="invalid-feedback">{{ errors.cca_name }}</div>
+          {% endif %}
+          <div class="field-hint">Required when Report Type is CCA</div>
+        </div>
+
+        <!-- Other Outputs -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Other Outputs</label>
+          <div class="field-hint mb-2">Optional — select all that apply</div>
+          {% set selected_outputs = form_data.getlist('other_outputs') if form_data else [] %}
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox"
+                   name="other_outputs" id="out_multiyear" value="Multi-Year"
+                   {% if 'Multi-Year' in selected_outputs %}checked{% endif %}>
+            <label class="form-check-label" for="out_multiyear">Multi-Year</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox"
+                   name="other_outputs" id="out_shp" value="SHP File"
+                   {% if 'SHP File' in selected_outputs %}checked{% endif %}>
+            <label class="form-check-label" for="out_shp">SHP File</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox"
+                   name="other_outputs" id="out_paper" value="Paper Copy"
+                   {% if 'Paper Copy' in selected_outputs %}checked{% endif %}>
+            <label class="form-check-label" for="out_paper">Paper Copy</label>
+          </div>
+          {% if errors.other_outputs %}
+          <div class="text-danger small mt-1">{{ errors.other_outputs }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Field Boundary File -->
+        <div class="mb-4">
+          <label for="field_boundary_file" class="form-label fw-semibold">
+            Field Boundary File <span class="required-marker">*</span>
+          </label>
+          <input type="file"
+                 class="form-control{% if errors.field_boundary_file %} is-invalid{% endif %}"
+                 id="field_boundary_file" name="field_boundary_file"
+                 accept=".geojson,.json,.zip,.kml">
+          {% if errors.field_boundary_file %}
+          <div class="invalid-feedback">{{ errors.field_boundary_file }}</div>
+          {% endif %}
+          <div class="field-hint">Accepted formats: GEOJSON, JSON, ZIP, KML</div>
+        </div>
+
+        <button type="submit" class="btn btn-success px-4">Submit Request</button>
+
+      </form>
+
+    {% endif %}
+
+    </div><!-- card-body -->
+  </div><!-- card -->
+
+  <p class="text-center text-muted mt-2" style="font-size:0.8rem;">
+    Fields marked <span class="required-marker">*</span> are required.
+  </p>
+</div>
+
+<script>
+function toggleCCAField(value) {
+  document.getElementById('cca_name_group').style.display = value === 'CCA' ? 'block' : 'none';
+}
+// Handle browser back-button repopulation of radio state
+window.addEventListener('DOMContentLoaded', function () {
+  var checked = document.querySelector('input[name="report_type"]:checked');
+  if (checked) toggleCCAField(checked.value);
+});
+</script>
+</body>
+</html>

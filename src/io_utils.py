@@ -17,6 +17,10 @@ def save_uploaded_file(uploaded_file: "streamlit.runtime.uploaded_file_manager.U
 def extract_shapefile_zip(zip_path: str) -> str:
     extract_dir = Path(tempfile.mkdtemp())
     with zipfile.ZipFile(zip_path, "r") as archive:
+        for member in archive.namelist():
+            dest = (extract_dir / member).resolve()
+            if not str(dest).startswith(str(extract_dir.resolve())):
+                raise ValueError(f"Unsafe path in ZIP: {member}")
         archive.extractall(extract_dir)
 
     for suffix in [".shp", ".geojson", ".json"]:

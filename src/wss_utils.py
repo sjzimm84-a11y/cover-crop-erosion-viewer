@@ -5,10 +5,13 @@ USDA Web Soil Survey (SSURGO) Soil Data Access API helpers.
 Free public API — no authentication required.
 """
 
+import logging
 import requests
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
 from typing import Dict, Any
+
+_log = logging.getLogger(__name__)
 
 
 def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
@@ -33,12 +36,14 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
 
     # Fallback if simplification fails
     if simplified_geom.is_empty or not simplified_geom.is_valid:
-        print("DEBUG: Simplification failed, using original geometry")
+        _log.debug("Simplification failed, using original geometry")
         simplified_geom = geom
     else:
         orig_vertices = len(list(geom.exterior.coords))
         new_vertices = len(list(simplified_geom.exterior.coords))
-        print(f"DEBUG: Geometry simplified: {orig_vertices} → {new_vertices} vertices ({100*(orig_vertices-new_vertices)/orig_vertices:.1f}% reduction)")
+        _log.debug("Geometry simplified: %d → %d vertices (%.1f%% reduction)",
+                   orig_vertices, new_vertices,
+                   100 * (orig_vertices - new_vertices) / orig_vertices)
 
     # Extract coordinates and ensure polygon closure
     coords = list(simplified_geom.exterior.coords)
@@ -50,10 +55,9 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     coord_str = ",".join([f"{coord[0]} {coord[1]}" for coord in coords])
     wkt_polygon = f"POLYGON(({coord_str}))"
 
-    # Debug output
-    print(f"DEBUG: Polygon coords: {len(coords)} points")
-    print(f"DEBUG: First coord: {coords[0]}, Last coord: {coords[-1]}")
-    print(f"DEBUG: WKT sample: {wkt_polygon[:100]}...")
+    _log.debug("Polygon coords: %d points", len(coords))
+    _log.debug("First coord: %s, Last coord: %s", coords[0], coords[-1])
+    _log.debug("WKT sample: %s...", wkt_polygon[:100])
 
     simple_query = f"""SELECT TOP 1
         mu.muname, c.compname, c.comppct_r,
@@ -70,8 +74,7 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
     AND c.majcompflag = 'Yes'
     ORDER BY c.comppct_r DESC"""
 
-    print(f"DEBUG: About to call SSURGO API...")
-    print(f"DEBUG: Query length: {len(simple_query)} chars")
+    _log.debug("About to call SSURGO API (query length: %d chars)", len(simple_query))
 
     try:
         resp = requests.post(
@@ -83,17 +86,16 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
             },
             timeout=15,
         )
-        print(f"DEBUG: SSURGO API status: {resp.status_code}")
-        print(f"DEBUG: Response length: {len(resp.text)} chars")
+        _log.debug("SSURGO API status: %d, response length: %d chars",
+                   resp.status_code, len(resp.text))
 
         if resp.status_code == 200:
             data = resp.json()
-            print(f"DEBUG: JSON keys: {list(data.keys())}")
             rows = data.get("Table", [])
-            print(f"DEBUG: Row count: {len(rows)}")
+            _log.debug("SSURGO row count: %d", len(rows))
             if rows:
-                print(f"DEBUG: First row (headers): {rows[0] if len(rows) > 0 else 'None'}")
-                print(f"DEBUG: Second row (data): {rows[1] if len(rows) > 1 else 'None'}")
+                _log.debug("First row (headers): %s", rows[0] if rows else "None")
+                _log.debug("Second row (data): %s", rows[1] if len(rows) > 1 else "None")
 
             if rows and len(rows) > 1:
                 row = rows[1]  # row 0 is column headers
@@ -104,8 +106,7 @@ def get_dominant_soil_series(boundary_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
                     "k_factor":      row[3] or "N/A",
                 }
     except Exception as e:
-        print(f"DEBUG: SSURGO API Exception: {type(e).__name__}: {e}")
-        print(f"DEBUG: Query that failed: {simple_query[:200]}...")
+        _log.debug("SSURGO API exception: %s: %s", type(e).__name__, e)
 
     return {
         "series_name":   "Not available",

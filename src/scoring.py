@@ -175,7 +175,9 @@ SPECIES_C_TARGETS = {
 def get_iowa_r_factor(boundary_gdf) -> tuple:
     """
     Look up Iowa R-factor zone from field centroid using FCC Census Block API.
-    Returns (r_factor: float, source_note: str).
+    Returns (r_factor: float, source_note: str, county_display: str | None).
+    county_display is formatted as "Name County, IA" for use in reports,
+    or None if the lookup fails.
     Northwest Iowa counties use R=150; all other Iowa counties default to
     R=175 per Iowa NRCS FOTG Section I USLE Figure 2 (September 2002).
     Falls back to R=175 if the API call fails.
@@ -194,14 +196,16 @@ def get_iowa_r_factor(boundary_gdf) -> tuple:
         )
         with urllib.request.urlopen(url, timeout=8) as resp:
             data = _json.loads(resp.read())
-        county_raw  = data.get("County", {}).get("name", "")
-        county_name = (county_raw.lower()
-                       .replace(" county", "").strip())
+        county_raw     = data.get("County", {}).get("name", "")
+        county_name    = (county_raw.lower()
+                          .replace(" county", "").strip())
+        county_display = f"{county_name.title()} County, IA" if county_name else None
         if county_name in IOWA_R_FACTOR_150_COUNTIES:
             return (
                 150.0,
                 f"R=150 (northwest Iowa — "
-                f"{county_name.title()} County, NRCS FOTG)"
+                f"{county_name.title()} County, NRCS FOTG)",
+                county_display,
             )
         note = (
             f"R=175 (standard Iowa — "
@@ -209,11 +213,12 @@ def get_iowa_r_factor(boundary_gdf) -> tuple:
             if county_name
             else "R=175 (standard Iowa zone, NRCS FOTG)"
         )
-        return (175.0, note)
+        return (175.0, note, county_display)
     except Exception:
         return (
             175.0,
-            "R=175 (default — county lookup unavailable, NRCS FOTG)"
+            "R=175 (default — county lookup unavailable, NRCS FOTG)",
+            None,
         )
 
 
@@ -375,12 +380,8 @@ def classify_risk_zones(risk_array: np.ndarray) -> np.ndarray:
     Returns float array: 1=Low, 2=Moderate, 3=High, 4=Critical (NaN where no data).
     Matches Concern Level labels used in field summary.
     """
-    zones = np.full(risk_array.shape, np.nan, dtype=float)
-    zones = np.where(risk_array < 0.3,                            1, zones)
-    zones = np.where((risk_array >= 0.3) & (risk_array < 0.7),   2, zones)
-    zones = np.where((risk_array >= 0.7) & (risk_array < 1.5),   3, zones)
-    zones = np.where(risk_array >= 1.5,                           4, zones)
-    zones = np.where(np.isnan(risk_array),                        np.nan, zones)
+    zones = np.digitize(risk_array, bins=[0.3, 0.7, 1.5]).astype(float) + 1
+    zones[np.isnan(risk_array)] = np.nan
     return zones
 
 
