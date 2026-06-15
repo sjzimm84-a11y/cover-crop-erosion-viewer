@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import logging
 from typing import Optional
 from datetime import datetime, timedelta
 
@@ -33,6 +34,8 @@ from src.visualization import build_map_with_rasters, build_zone_risk_chart
 from src.report_generator import generate_field_report, generate_producer_report
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
+
+_log = logging.getLogger(__name__)
 
 # GEE NDVI imports — graceful fallback if not configured
 SENTINEL_AVAILABLE = False
@@ -588,6 +591,107 @@ if ndvi_stats["mean"] < -0.05:
     )
     st.stop()
 
+# ---------------------------------------------------------------------------
+# Area-weighted soil K/T from SSURGO (Soil Data Access).
+# On any failure or empty/invalid return, soil_summary stays None and
+# score_erosion_concern falls back to the WSS k_factor/soil_series passed
+# below (soil_source_fallback=True). The WSS arguments are unchanged.
+# ---------------------------------------------------------------------------
+soil_summary = None
+try:
+    from src import soil_data
+    # field_boundary always carries a defined CRS (load_boundary_file sets one);
+    # reproject to WGS84 lon/lat only when it is not already EPSG:4326.
+    _boundary_gdf = field_boundary
+    if _boundary_gdf.crs is not None and _boundary_gdf.crs.to_epsg() != 4326:
+        _boundary_gdf = _boundary_gdf.to_crs("EPSG:4326")
+    _boundary_ll = _boundary_gdf.geometry.iloc[0]
+    _summary = soil_data.soil_summary_for_boundary(_boundary_ll)
+    if (_summary
+            and _summary.get("k_factor") is not None
+            and _summary.get("t_value") is not None):
+        soil_summary = _summary
+except Exception as _soil_exc:
+    _log.warning("SDA soil_summary fetch failed (%s: %s) — using WSS fallback",
+                 type(_soil_exc).__name__, _soil_exc)
+    soil_summary = None
+
+if soil_summary is not None:
+    _log.info("Soil K/T source: area-weighted SDA SSURGO — K=%s T=%s across %s map unit(s)",
+              soil_summary.get("k_factor"), soil_summary.get("t_value"),
+              soil_summary.get("n_mukeys"))
+else:
+    _log.info("Soil K/T source: WSS fallback — k_factor=%s, series=%s",
+              st.session_state.get("soil_k_factor"),
+              st.session_state.get("soil_series"))
+
+# ---------------------------------------------------------------------------
+# Phase 4 — zone × map-unit tolerance geometry wiring.
+# Polygonize the Risk-zone raster, fetch SSURGO map-unit polygons joined to the
+# Phase-1 component-weighted T, and supply both to score_erosion_concern so the
+# existing Phase-3 path computes per-zone area-weighted T. Any failure here
+# degrades cleanly to zone_geometries=None / mupolygons=None (scoring falls back
+# to field-level T — identical to today's output). No crash under any failure.
+#   G1 intersection CRS : EPSG:4326 (zones reprojected from the NDVI raster CRS
+#                         to WGS84 to match SDA mupolygons).
+#   G2 acreage CRS      : field UTM zone (derived downstream in soil_data).
+# ---------------------------------------------------------------------------
+zone_geometries     = None
+mupolygons          = None
+_zone_acre_crs      = None
+try:
+    from rasterio.features import shapes as _rio_shapes
+    from shapely.geometry import shape as _shp_shape
+    from shapely.ops import unary_union as _unary_union
+    import geopandas as _gpd
+    from src import soil_data as _soil
+
+    _ndvi_crs = ndvi_profile.get("crs")
+    if _ndvi_crs is None:
+        raise ValueError("NDVI raster CRS unavailable — cannot georeference zones")
+
+    # Polygonize each Risk-zone CLASS (dissolve same-class pixels). Mirrors the
+    # proven export_risk_zones_shp pattern: integer array + uint8 valid mask.
+    _zone_int   = np.where(np.isnan(_risk_zone_preview), 0, _risk_zone_preview).astype(np.int32)
+    _zone_valid = (_zone_int > 0).astype(np.uint8)
+    if _zone_valid.sum() == 0:
+        raise ValueError("no valid Risk-zone pixels to polygonize")
+
+    _zone_parts: dict = {}
+    for _gdict, _val in _rio_shapes(_zone_int, mask=_zone_valid, transform=ndvi_transform):
+        _v = int(_val)
+        if _v in (1, 2, 3, 4):
+            _zone_parts.setdefault(_v, []).append(_shp_shape(_gdict))
+    _zone_native = {v: _unary_union(parts) for v, parts in _zone_parts.items()}
+
+    # G1: reproject the polygonized zones from the NDVI raster CRS to WGS84 so
+    # the intersection with EPSG:4326 SDA mupolygons happens in a single CRS.
+    _zgs = _gpd.GeoSeries(list(_zone_native.values()), crs=_ndvi_crs)
+    _zone_acre_crs = str(_zgs.estimate_utm_crs())          # projected CRS for acreage (G2)
+    _zgs_ll        = _zgs.to_crs("EPSG:4326")
+    zone_geometries = dict(zip(_zone_native.keys(), _zgs_ll.geometry))
+
+    # Build mupolygons as (mukey, geometry, component_weighted_T) for the field.
+    _boundary_gdf = field_boundary
+    if _boundary_gdf.crs is not None and _boundary_gdf.crs.to_epsg() != 4326:
+        _boundary_gdf = _boundary_gdf.to_crs("EPSG:4326")
+    _boundary_ll_z = _boundary_gdf.geometry.iloc[0]
+    _mupolys = _soil.fetch_mupolygons(_boundary_ll_z)
+    if not _mupolys:
+        raise ValueError("SDA returned no map-unit polygons for this field")
+    _mu_per = _soil.component_weighted(
+        _soil.fetch_soil_components(sorted({mk for mk, _ in _mupolys}))
+    )
+    mupolygons = [(mk, g, _mu_per.get(mk, {}).get("t")) for mk, g in _mupolys]
+except Exception as _zwire_exc:
+    _log.warning(
+        "Zone×map-unit geometry wiring failed (%s: %s) — degrading to field-level T",
+        type(_zwire_exc).__name__, _zwire_exc,
+    )
+    zone_geometries = None
+    mupolygons      = None
+    _zone_acre_crs  = None
+
 risk_result = score_erosion_concern(
     ndvi_stats=ndvi_stats,
     slope_stats=slope_stats,
@@ -599,6 +703,9 @@ risk_result = score_erosion_concern(
     k_factor=st.session_state.get("soil_k_factor"),
     soil_series=st.session_state.get("soil_series", "default"),
     r_factor=st.session_state.get("r_factor", 175.0),
+    soil_summary=soil_summary,
+    zone_geometries=zone_geometries,
+    mupolygons=mupolygons,
 )
 
 _zone_erosion_summary   = risk_result.get("zone_erosion_summary", [])
@@ -618,6 +725,37 @@ if _zone_erosion_summary:
     _a_current_weighted  = _wc if _any_c else None
     if _a_baseline_weighted and _a_saved_weighted is not None:
         _pct_reduction_weighted = (_a_saved_weighted / _a_baseline_weighted) * 100
+
+# ---------------------------------------------------------------------------
+# Per-(risk-zone × map-unit) tolerance table (Plan B underneath, readable on
+# top). Joins each zone's RUSLE soil loss A (a_current_zone) to the
+# component-weighted T of every map unit it overlaps, with overlap_acres in the
+# field UTM CRS (G2). Default view = rows where within_t_zone is False AND
+# overlap_acres >= 0.5 ac; all other overlaps roll into one summary line. The
+# FULL unfiltered table is retained on risk_result for downstream use. Absent
+# geometry → empty table (matches today's behavior).
+# ---------------------------------------------------------------------------
+_zone_mukey_tol = {
+    "rows_full": [], "rows_flagged": [],
+    "rolled_summary": {"n_rows": 0, "overlap_acres": 0.0},
+    "intersect_crs": "EPSG:4326", "acre_crs": _zone_acre_crs,
+}
+if zone_geometries is not None and mupolygons is not None:
+    try:
+        from src import soil_data as _soil_tol
+        _a_by_zone = {
+            z["zone_label"]: z.get("a_current_zone") for z in _zone_erosion_summary
+        }
+        _zone_mukey_tol = _soil_tol.zone_mukey_tolerance_rows(
+            zone_geometries=zone_geometries,
+            mupolygons=mupolygons,
+            a_by_zone=_a_by_zone,
+            acre_crs=_zone_acre_crs,
+        )
+    except Exception as _zmk_exc:
+        _log.warning("zone×map-unit tolerance table failed (%s: %s) — table omitted",
+                     type(_zmk_exc).__name__, _zmk_exc)
+risk_result["zone_mukey_tolerance"] = _zone_mukey_tol
 
 # Hoist image date string — used in Section 4 and PDF call
 _s_latest   = st.session_state.ndvi_scene_latest

@@ -392,11 +392,25 @@ def _compute_zone_erosion_summary(
     residue_system: str,
     k_factor: Any,
     r_factor: float,
+    field_t_value: Any = None,
+    zone_geometries: Optional[dict] = None,
+    mupolygons: Optional[list] = None,
 ) -> list:
     """Per-risk-zone RUSLE erosion and reduction summary.
     Returns list of dicts keyed: zone_label, mean_ndvi, c_adj, c_baseline,
-    mean_ls, a_current_zone, pct_reduction, a_saved_zone, area_fraction.
-    Only zones with at least one valid pixel are included."""
+    mean_ls, a_current_zone, pct_reduction, a_saved_zone, area_fraction,
+    plus zone-level soil-tolerance fields t_zone_weighted, t_zone_min,
+    t_zone_max, within_t_zone.
+    Only zones with at least one valid pixel are included.
+
+    Zone-level T (zone_geometries + mupolygons): Risk zones and SSURGO map
+    units are different spatial partitions, so each zone's T is area-weighted
+    from the map units it overlaps via soil_data.zone_weighted_t. When
+    zone_geometries (keyed by zone value 1-4, WGS84 shapely) or mupolygons
+    (``(mukey, geom, t)`` tuples) are unavailable, the t_zone_* fields are set
+    to None and within_t_zone falls back to comparing A against field_t_value
+    (the field-level T). No network call is made here; zone_weighted_t is a
+    pure shapely helper imported lazily only when geometry is supplied."""
     try:
         k = float(k_factor)
     except (TypeError, ValueError):
@@ -407,6 +421,14 @@ def _compute_zone_erosion_summary(
     total_valid = int(np.sum(valid_mask))
     if total_valid == 0:
         return []
+
+    # Lazily bind the pure shapely zone-T helper only when geometry is given.
+    _zone_weighted_t = None
+    if zone_geometries is not None and mupolygons:
+        try:
+            from src.soil_data import zone_weighted_t as _zone_weighted_t
+        except Exception:
+            _zone_weighted_t = None
 
     c_baseline = _continuous_c_factor(0.0, residue_system)  # C at NDVI=0 = intercept
 
@@ -436,6 +458,31 @@ def _compute_zone_erosion_summary(
             pct_reduction = None
             a_saved_zone  = None
 
+        # ----------------------------------------------------------------
+        # Zone-level area-weighted T from the SSURGO map units this zone
+        # overlaps. Degrades to field-level T (zone fields None) when zone
+        # geometry / mupolygons are unavailable — never invents per-pixel T.
+        # ----------------------------------------------------------------
+        t_zone_weighted = t_zone_min = t_zone_max = None
+        if _zone_weighted_t is not None:
+            _zgeom = zone_geometries.get(zone_val)
+            if _zgeom is not None:
+                try:
+                    _zt = _zone_weighted_t(_zgeom, mupolygons)
+                    t_zone_weighted = _zt["t_zone_weighted"]
+                    t_zone_min      = _zt["t_min"]
+                    t_zone_max      = _zt["t_max"]
+                except Exception:
+                    t_zone_weighted = t_zone_min = t_zone_max = None
+
+        # within_t_zone uses the zone's own T when available, otherwise reuses
+        # the field-level T (so the per-zone flag still carries a signal).
+        _t_for_flag = t_zone_weighted if t_zone_weighted is not None else field_t_value
+        if a_current_zone is not None and _t_for_flag is not None:
+            within_t_zone = bool(a_current_zone <= _t_for_flag)
+        else:
+            within_t_zone = None
+
         results.append({
             "zone_label":      zone_label,
             "mean_ndvi":       round(mean_ndvi, 3),
@@ -448,6 +495,10 @@ def _compute_zone_erosion_summary(
             "pct_reduction":   round(pct_reduction, 1)   if pct_reduction   is not None else None,
             "a_saved_zone":    round(a_saved_zone, 2)    if a_saved_zone    is not None else None,
             "area_fraction":   round(area_fraction, 4),
+            "t_zone_weighted": round(t_zone_weighted, 2) if t_zone_weighted is not None else None,
+            "t_zone_min":      t_zone_min,
+            "t_zone_max":      t_zone_max,
+            "within_t_zone":   within_t_zone,
         })
 
     return results
@@ -489,6 +540,9 @@ def score_erosion_concern(
     k_factor: Any = None,
     soil_series: str = "default",
     r_factor: float = 175.0,
+    soil_summary: Optional[dict] = None,
+    zone_geometries: Optional[dict] = None,
+    mupolygons: Optional[list] = None,
 ) -> Dict[str, Any]:
     """
     Score field-level erosion concern using RUSLE C x LS proxy.
@@ -500,6 +554,21 @@ def score_erosion_concern(
     C-factor to account for crop residue not captured by satellite imagery.
     When k_factor is provided, estimate_soil_loss() is called and the result
     is included in the return dict under the "soil_loss" key.
+    When soil_summary (the dict from soil_data.soil_summary_for_boundary) is
+    provided with non-null area-weighted "k_factor" and "t_value", those values
+    replace the passed-in k_factor and the soil_series-derived T at the
+    soil-loss and zone-erosion sites, and soil_source_fallback is False;
+    otherwise the passed-in k_factor / soil_series values are used and
+    soil_source_fallback is True. ksat_r, hydgrp and the drainage-class
+    breakdown from soil_summary are stored verbatim under "soil_attrs"
+    (Phase 3 handoff — no computation done here). This module performs no
+    network call; soil_summary is computed upstream and passed in.
+    When zone_geometries (keyed by zone value 1-4, WGS84 shapely) and
+    mupolygons (``(mukey, geom, t)`` tuples) are supplied, each zone in the
+    zone_erosion_summary gains an area-weighted t_zone_weighted / t_zone_min /
+    t_zone_max and a within_t_zone flag; otherwise those fields are None and
+    within_t_zone reuses the field-level T. Field-level soil_loss A/T outputs
+    are unchanged either way.
 
     Returns
     -------
@@ -516,6 +585,10 @@ def score_erosion_concern(
         risk_array           : per-pixel Risk Index (None if no arrays given)
         zone_array           : per-pixel zone 1–4 (None if no arrays given)
         soil_loss            : dict from estimate_soil_loss() (None if k_factor missing)
+        soil_source_fallback : True when soil_summary was absent/invalid and the
+                               passed-in k_factor / soil_series T were used
+        soil_attrs           : dict of ksat_r / hydgrp / drainage_fraction from
+                               soil_summary (None on fallback)
         low_cover / steep_slope / ndvi_threshold / slope_threshold : legacy
         recommendation       : plain-English advisory text
     """
@@ -529,13 +602,39 @@ def score_erosion_concern(
     ls_factor   = _lookup_ls_factor(slope_mean)
     rusle_score = c_factor_adjusted * ls_factor
 
+    # ------------------------------------------------------------------
+    # Resolve K and T source. Prefer the area-weighted soil_summary (SDA)
+    # when it is provided and carries non-null K and T; otherwise fall back
+    # to the passed-in k_factor and the soil_series-derived T (current WSS
+    # path). This changes only the *source* of K/T — the RUSLE formula,
+    # LS/R/C models, and Risk Index zone thresholds are untouched.
+    # ------------------------------------------------------------------
+    _use_soil_summary = (
+        isinstance(soil_summary, dict)
+        and soil_summary.get("k_factor") is not None
+        and soil_summary.get("t_value") is not None
+    )
+    if _use_soil_summary:
+        effective_k          = soil_summary["k_factor"]
+        t_value              = soil_summary["t_value"]
+        soil_source_fallback = False
+        soil_attrs           = {
+            "ksat_r":            soil_summary.get("ksat_r"),
+            "hydgrp":            soil_summary.get("hydgrp"),
+            "drainage_fraction": soil_summary.get("drainage_fraction"),
+        }
+    else:
+        effective_k          = k_factor
+        _series_key          = (soil_series or "default").split()[0]
+        t_value              = IOWA_T_VALUES.get(_series_key, IOWA_T_VALUES["default"])
+        soil_source_fallback = True
+        soil_attrs           = None
+
     # Soil loss estimation (A = R × K × LS × C)
-    _series_key      = (soil_series or "default").split()[0]
-    t_value          = IOWA_T_VALUES.get(_series_key, IOWA_T_VALUES["default"])
     soil_loss_result = estimate_soil_loss(
         c_factor=c_factor_adjusted,
         ls_factor=ls_factor,
-        k_factor=k_factor,
+        k_factor=effective_k,
         t_value=t_value,
         r_factor=r_factor,
     )
@@ -614,8 +713,11 @@ def score_erosion_concern(
             slope_array=slope_array,
             zone_array=zone_array_out,
             residue_system=residue_system,
-            k_factor=k_factor,
+            k_factor=effective_k,
             r_factor=r_factor,
+            field_t_value=t_value,
+            zone_geometries=zone_geometries,
+            mupolygons=mupolygons,
         )
 
     return {
@@ -633,6 +735,8 @@ def score_erosion_concern(
         "zone_counts":          zone_counts_out,
         "zone_erosion_summary": zone_erosion_out,
         "soil_loss":            soil_loss_result,
+        "soil_source_fallback": soil_source_fallback,
+        "soil_attrs":           soil_attrs,
         "low_cover":            ndvi_mean < ndvi_threshold,
         "steep_slope":          slope_mean > slope_threshold,
         "ndvi_threshold":       ndvi_threshold,
