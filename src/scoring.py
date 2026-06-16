@@ -186,8 +186,12 @@ def get_iowa_r_factor(boundary_gdf) -> tuple:
     import json as _json
 
     try:
-        centroid = (boundary_gdf.to_crs("EPSG:4326")
-                    .geometry.centroid.iloc[0])
+        # Centroid computed in a projected CRS (UTM) then converted back to
+        # lon/lat, avoiding the "geographic CRS centroid likely incorrect"
+        # warning. County lookup is unaffected (sub-metre centroid shift).
+        _gdf_ll  = boundary_gdf.to_crs("EPSG:4326")
+        centroid = (_gdf_ll.to_crs(_gdf_ll.estimate_utm_crs())
+                    .geometry.centroid.to_crs("EPSG:4326").iloc[0])
         lat, lon = centroid.y, centroid.x
         url = (
             f"https://geo.fcc.gov/api/census/block/find"

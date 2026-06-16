@@ -841,9 +841,14 @@ _valid_px_count = int(np.sum(~np.isnan(ndvi_array)))
 _px_w = abs(ndvi_transform.a)
 _px_h = abs(ndvi_transform.e)
 if _px_w < 1.0:  # degree units — convert to metres at field centroid latitude
-    _lat_rad = np.radians(
-        field_boundary.to_crs("EPSG:4326").geometry.centroid.iloc[0].y
+    # Centroid computed in a projected CRS (UTM) then converted back to lon/lat,
+    # avoiding the "geographic CRS centroid likely incorrect" warning.
+    _bnd_ll = field_boundary.to_crs("EPSG:4326")
+    _centroid_ll = (
+        _bnd_ll.to_crs(_bnd_ll.estimate_utm_crs())
+        .geometry.centroid.to_crs("EPSG:4326").iloc[0]
     )
+    _lat_rad = np.radians(_centroid_ll.y)
     _pixel_area_m2 = (
         (_px_w * 111_320.0 * np.cos(_lat_rad)) *
         (_px_h * 110_574.0)
@@ -873,16 +878,38 @@ _total_row = pd.DataFrame([{
     "Zone":      "Total",
     "Acres":     round(_total_valid_acres, 1),
     _pct_col:    100.0,
-    "NDVI Mean": "",
+    "NDVI Mean": np.nan,   # numeric column — NaN renders blank; "" breaks pyarrow
 }])
 zone_summary_display = pd.concat(
     [zone_summary_display, _total_row],
     ignore_index=True,
 )
 
-zone_summary_display = zone_summary_display.fillna("")
+# Blank only non-numeric columns; leave numeric columns as float-with-NaN so
+# pyarrow can serialize them (a "" in a numeric column raises ArrowInvalid).
+# Selecting by "number" is stable across pandas 2/3 string-dtype changes.
+_num_cols  = zone_summary_display.select_dtypes(include="number").columns
+_fill_cols = [c for c in zone_summary_display.columns if c not in _num_cols]
+zone_summary_display[_fill_cols] = zone_summary_display[_fill_cols].fillna("")
 
 st.dataframe(zone_summary_display, hide_index=True, use_container_width=True)
+
+# Soil-source + Phase-4 observability caption (read from existing risk_result
+# fields; no table rendered here — the full tolerance table is Phase 5).
+_zmt        = risk_result.get("zone_mukey_tolerance") or {}
+_zmt_rows   = len(_zmt.get("rows_full") or [])
+if not risk_result.get("soil_source_fallback", True) and soil_summary is not None:
+    _k = soil_summary.get("k_factor")
+    _t = soil_summary.get("t_value")
+    _n = soil_summary.get("n_mukeys")
+    _k_disp = f"{_k:.2f}" if isinstance(_k, (int, float)) else _k
+    _t_disp = f"{_t:.1f}" if isinstance(_t, (int, float)) else _t
+    st.caption(
+        f"Soil source: area-weighted SDA SSURGO "
+        f"(K={_k_disp}, T={_t_disp}, {_n} map unit(s)) · zone×soil rows: {_zmt_rows}"
+    )
+else:
+    st.caption("Soil source: WSS fallback · zone×soil tolerance unavailable this run")
 
 _chart_label_map = {
     "Low cover":  ndvi_low_label,
