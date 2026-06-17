@@ -318,3 +318,89 @@ def test_live_monona_k_t_and_acreage_reconciliation():
     aoi_acres = _acres_in(aoi, EXPECTED_UTM)
     # SSURGO fully tiles the AOI, so clipped overlaps reconcile to ~field acres.
     assert abs(sum_acres - aoi_acres) / aoi_acres < 0.02, (sum_acres, aoi_acres)
+
+
+# ---------------------------------------------------------------------------
+# Per-soil K -> A rescale, A/T + severity, fragment pooling (Tech Guide v1.8)
+# ---------------------------------------------------------------------------
+_LEFT  = box(WEST, NORTH - N * PX, WEST + 25 * PX, NORTH)            # left half
+_RIGHT = box(WEST + 25 * PX, NORTH - N * PX, WEST + N * PX, NORTH)   # right half
+_ZONE  = {4: box(WEST, NORTH - N * PX, WEST + N * PX, NORTH)}        # one full-field zone
+
+
+def test_per_soil_A_varies_with_K_and_sorts():
+    """(a) Same zone (same a_zone, LS, C), two soils K=0.49 vs 0.32 -> A scales
+    by the K ratio and the higher-K soil sorts first."""
+    mupolys = [("MU_K49", _LEFT, 4.0), ("MU_K32", _RIGHT, 4.0)]  # same T isolates K
+    res = zone_mukey_tolerance_rows(
+        _ZONE, mupolys, {4: 8.0}, acre_crs=EXPECTED_UTM,
+        k_by_mukey={"MU_K49": 0.49, "MU_K32": 0.32}, k_field=0.369,
+    )
+    rows = {r["mukey"]: r for r in res["rows_full"]}
+    a49, a32 = rows["MU_K49"]["a_zone"], rows["MU_K32"]["a_zone"]
+    assert a49 == pytest.approx(8.0 * 0.49 / 0.369, abs=0.01)
+    assert a32 == pytest.approx(8.0 * 0.32 / 0.369, abs=0.01)
+    assert a49 / a32 == pytest.approx(0.49 / 0.32, abs=0.01)
+    assert res["rows_full"][0]["mukey"] == "MU_K49"   # higher A/T sorts first
+
+
+def test_a_over_t_and_severity_with_T_interaction():
+    """(b) K=0.49/T=4 vs K=0.37/T=5 in the same zone -> the 0.49/T=4 soil has the
+    higher A/T and the correct verbatim severity bucket."""
+    mupolys = [("MU_FRAGILE", _LEFT, 4.0), ("MU_MONONA", _RIGHT, 5.0)]
+    res = zone_mukey_tolerance_rows(
+        _ZONE, mupolys, {4: 5.0}, acre_crs=EXPECTED_UTM,
+        k_by_mukey={"MU_FRAGILE": 0.49, "MU_MONONA": 0.37}, k_field=0.4,
+    )
+    rows = {r["mukey"]: r for r in res["rows_full"]}
+    # A_fragile = 5*0.49/0.4 = 6.125 ; A/T = 1.531 -> Near
+    assert rows["MU_FRAGILE"]["a_over_t"] == pytest.approx(1.53, abs=0.01)
+    assert rows["MU_FRAGILE"]["severity"] == "Near tolerable limit"
+    # A_monona = 5*0.37/0.4 = 4.625 ; A/T = 0.925 -> Within
+    assert rows["MU_MONONA"]["a_over_t"] == pytest.approx(0.93, abs=0.01)
+    assert rows["MU_MONONA"]["severity"] == "Within tolerable limit"
+    assert rows["MU_FRAGILE"]["a_over_t"] > rows["MU_MONONA"]["a_over_t"]
+    assert res["rows_full"][0]["mukey"] == "MU_FRAGILE"
+
+
+def test_fragment_pooling_one_row_summed_acres():
+    """(c) Two polygon fragments of one map unit in one zone -> ONE row whose
+    acres equal the summed fragment acres."""
+    mupolys = [("MU_SAME", _LEFT, 5.0), ("MU_SAME", _RIGHT, 5.0)]  # two fragments
+    res = zone_mukey_tolerance_rows(_ZONE, mupolys, {4: 3.0}, acre_crs=EXPECTED_UTM)
+    same = [r for r in res["rows_full"] if r["mukey"] == "MU_SAME"]
+    assert len(same) == 1
+    expected = _acres_in(_LEFT, EXPECTED_UTM) + _acres_in(_RIGHT, EXPECTED_UTM)
+    assert same[0]["overlap_acres"] == pytest.approx(expected, abs=0.05)
+
+
+def test_severity_boundary_cases():
+    """(d) A/T exactly 1.0, 2.0, 5.0 land per the <= rules (rescale identity)."""
+    cases = [
+        (5.0,  "Within tolerable limit"),       # A/T = 1.0
+        (10.0, "Near tolerable limit"),         # A/T = 2.0
+        (25.0, "Exceeds tolerable limit"),      # A/T = 5.0
+        (25.5, "Significantly exceeds limit"),  # A/T = 5.1
+    ]
+    for a_zone, expected in cases:
+        res = zone_mukey_tolerance_rows(
+            _ZONE, [("MU", _ZONE[4], 5.0)], {4: a_zone}, acre_crs=EXPECTED_UTM,
+            k_by_mukey={"MU": 1.0}, k_field=1.0,   # identity rescale -> A_row = a_zone
+        )
+        row = res["rows_full"][0]
+        assert row["a_over_t"] == pytest.approx(a_zone / 5.0, abs=0.001)
+        assert row["severity"] == expected, (a_zone, row["severity"])
+
+
+def test_monona_single_unit_rescale_is_noop():
+    """(e) Single Monona unit K=0.37/T=5 with K_mukey == K_field -> A unchanged
+    (the field-level A path is untouched by the per-soil rescale)."""
+    res = zone_mukey_tolerance_rows(
+        _ZONE, [("MU_MONONA", _ZONE[4], 5.0)], {4: 2.4}, acre_crs=EXPECTED_UTM,
+        k_by_mukey={"MU_MONONA": 0.37}, k_field=0.37,
+    )
+    row = res["rows_full"][0]
+    assert row["a_zone"] == pytest.approx(2.4, abs=0.001)   # identity, no change
+    assert row["soil_T"] == 5.0
+    assert row["within_t_zone"] is True
+    assert row["severity"] == "Within tolerable limit"

@@ -488,9 +488,10 @@ except Exception:
     st.session_state.r_factor_note = "R=175 (default — county lookup failed, standard Iowa)"
 
 # ---------------------------------------------------------------------------
-# Map
+# Session-state defaults + risk preview (map itself is built later, after
+# scoring, so its soil layer can reuse the Phase-4 mupolygons).
 # ---------------------------------------------------------------------------
-status.text("Building map...")
+status.text("Analyzing erosion risk and soil tolerance...")
 progress.progress(85)
 # Preserve zoom level across reruns so sliders don't reset the map
 if "map_zoom" not in st.session_state:
@@ -528,51 +529,10 @@ _risk_index_array = pixel_risk_index(
 )
 _risk_zone_preview = classify_risk_zones(_risk_index_array)
 
-folium_map = build_map_with_rasters(
-    field_boundary, ndvi_array, slope_percent,
-    ndvi_transform, ndvi_profile.get("crs"),
-    ndvi_opacity, slope_opacity,
-    zoom_start=st.session_state.map_zoom,
-    ndvi_threshold=ndvi_threshold,
-    risk_zone_array=_risk_zone_preview,
-)
-
-progress.progress(100)
-status.empty()
-progress.empty()
-
-st.subheader("🗺️ Field Risk Map")
-try:
-    from streamlit_folium import st_folium
-    map_data = st_folium(
-        folium_map,
-        height=520,
-        width='stretch',
-        returned_objects=["last_zoom", "last_center"],
-        key="field_map",
-    )
-    # Save zoom and center so next rerun starts at same position
-    if map_data and map_data.get("last_zoom"):
-        st.session_state.map_zoom = map_data["last_zoom"]
-    if map_data and map_data.get("last_center"):
-        st.session_state.map_center = map_data["last_center"]
-except ImportError:
-    # Fallback if streamlit-folium not installed
-    st.components.v1.html(folium_map._repr_html_(), height=520)
-
-with st.expander("How are risk zones calculated?"):
-    st.markdown("""
-**Risk Index = C-factor × LS-factor (computed per pixel)**
-
-| Zone | Risk Index | Meaning |
-|------|-----------|---------|
-| 🟢 Low | < 0.3 | Adequate cover for slope conditions |
-| 🟡 Moderate | 0.3–0.7 | Variable cover — monitor steep units |
-| 🟠 High | 0.7–1.5 | Marginal cover on identified slopes |
-| 🔴 Critical | > 1.5 | Low cover on high-risk slope units |
-
-C-factor is derived from satellite NDVI using Iowa cereal rye calibration. LS-factor is derived from Iowa 3m DEM slope. Field-level Concern Level reflects the distribution of pixel-level Risk Index scores across the field.
-""")
+# NOTE: the field risk map is built and rendered LATER (after the scoring +
+# Phase-4 zone×map-unit block), so the optional SSURGO soil layer can be drawn
+# from mupolygons / per-mukey T already computed there — without a second SDA
+# fetch. The map still renders above the badge and all detail tables.
 
 # ---------------------------------------------------------------------------
 # Stats and scoring
@@ -639,6 +599,7 @@ else:
 zone_geometries     = None
 mupolygons          = None
 _zone_acre_crs      = None
+_mu_per             = {}   # {mukey: {k,t,musym,...}} — for soil layer + table labels
 try:
     from rasterio.features import shapes as _rio_shapes
     from shapely.geometry import shape as _shp_shape
@@ -746,16 +707,142 @@ if zone_geometries is not None and mupolygons is not None:
         _a_by_zone = {
             z["zone_label"]: z.get("a_current_zone") for z in _zone_erosion_summary
         }
+        # K_field = the field area-weighted K that a_current_zone was computed
+        # with (effective_k in scoring): SDA k_factor when available, else WSS K.
+        if soil_summary is not None:
+            _k_field = soil_summary.get("k_factor")
+        else:
+            _k_field = st.session_state.get("soil_k_factor")
+        _k_by_mukey     = {mk: (info or {}).get("k") for mk, info in _mu_per.items()}
+        _musym_by_mukey = {mk: (info or {}).get("musym") for mk, info in _mu_per.items()}
         _zone_mukey_tol = _soil_tol.zone_mukey_tolerance_rows(
             zone_geometries=zone_geometries,
             mupolygons=mupolygons,
             a_by_zone=_a_by_zone,
             acre_crs=_zone_acre_crs,
+            k_by_mukey=_k_by_mukey,
+            musym_by_mukey=_musym_by_mukey,
+            k_field=_k_field,
         )
     except Exception as _zmk_exc:
         _log.warning("zone×map-unit tolerance table failed (%s: %s) — table omitted",
                      type(_zmk_exc).__name__, _zmk_exc)
 risk_result["zone_mukey_tolerance"] = _zone_mukey_tol
+
+# ---------------------------------------------------------------------------
+# Field risk map (relocated here so the soil layer can use the Phase-4
+# mupolygons / per-mukey T without a second SDA fetch). Soil layer is OFF by
+# default, so the default view is unchanged. Built only when mupolygons exist.
+# ---------------------------------------------------------------------------
+_soil_layer = None
+if mupolygons:
+    _soil_layer = []
+    for _mk, _geom, _t in mupolygons:
+        _info = _mu_per.get(_mk, {}) or {}
+        _soil_layer.append({
+            "geometry": _geom,
+            "mukey":    _mk,
+            "musym":    _info.get("musym"),
+            "t":        _t,
+            "k":        _info.get("k"),
+        })
+
+folium_map = build_map_with_rasters(
+    field_boundary, ndvi_array, slope_percent,
+    ndvi_transform, ndvi_profile.get("crs"),
+    ndvi_opacity, slope_opacity,
+    zoom_start=st.session_state.map_zoom,
+    ndvi_threshold=ndvi_threshold,
+    risk_zone_array=_risk_zone_preview,
+    soil_polygons=_soil_layer,
+)
+
+progress.progress(100)
+status.empty()
+progress.empty()
+
+st.subheader("🗺️ Field Risk Map")
+try:
+    from streamlit_folium import st_folium
+    map_data = st_folium(
+        folium_map,
+        height=520,
+        width='stretch',
+        returned_objects=["last_zoom", "last_center"],
+        key="field_map",
+    )
+    # Save zoom and center so next rerun starts at same position
+    if map_data and map_data.get("last_zoom"):
+        st.session_state.map_zoom = map_data["last_zoom"]
+    if map_data and map_data.get("last_center"):
+        st.session_state.map_center = map_data["last_center"]
+except ImportError:
+    # Fallback if streamlit-folium not installed
+    st.components.v1.html(folium_map._repr_html_(), height=520)
+
+with st.expander("How are risk zones calculated?"):
+    st.markdown("""
+**Risk Index = C-factor × LS-factor (computed per pixel)**
+
+| Zone | Risk Index | Meaning |
+|------|-----------|---------|
+| 🟢 Low | < 0.3 | Adequate cover for slope conditions |
+| 🟡 Moderate | 0.3–0.7 | Variable cover — monitor steep units |
+| 🟠 High | 0.7–1.5 | Marginal cover on identified slopes |
+| 🔴 Critical | > 1.5 | Low cover on high-risk slope units |
+
+C-factor is derived from satellite NDVI using Iowa cereal rye calibration. LS-factor is derived from Iowa 3m DEM slope. Field-level Concern Level reflects the distribution of pixel-level Risk Index scores across the field.
+""")
+
+# ---------------------------------------------------------------------------
+# Soil-loss tolerance by Risk Zone × Soil map unit (Phase 5 surfacing).
+# Renders the exceedance rows (rows_flagged: A_row > T AND pooled overlap >=
+# 0.5 ac), one row per (zone × map unit) with per-soil A (= R·K_mukey·LS·C),
+# A/T ratio and Tech Guide v1.8 severity, sorted worst-first by A/T. Numeric
+# columns stay numeric (Arrow-safe). Graceful degrade when unavailable.
+# ---------------------------------------------------------------------------
+st.subheader("🛟 Soil-Loss Tolerance by Risk Zone × Soil")
+_zmt        = risk_result.get("zone_mukey_tolerance") or {}
+_zmt_full   = _zmt.get("rows_full") or []
+_soil_tol_available = bool(mupolygons) and bool(_zmt_full)
+
+if not _soil_tol_available:
+    st.caption("Soil-level tolerance unavailable this run.")
+else:
+    _flagged = _zmt.get("rows_flagged") or []   # already sorted by A/T descending
+    _rolled  = _zmt.get("rolled_summary") or {"n_rows": 0, "overlap_acres": 0.0}
+
+    def _round_half(x):
+        return round(x * 2) / 2 if x is not None else np.nan
+
+    if _flagged:
+        _tol_rows = [{
+            "Risk Zone":     r["risk_zone"],
+            "Soil (musym)":  r.get("musym") or r["mukey"],
+            "T":             r["soil_T"],                                   # numeric
+            "A/T":           (f"{r['a_over_t']:.1f}×" if r.get("a_over_t") is not None else ""),
+            "Severity":      r.get("severity") or "",
+            "Acres":         _round_half(r["overlap_acres"]),              # numeric
+            "A":             r["a_zone"],                                   # numeric (per-soil A_row)
+        } for r in _flagged]
+        _tol_df = pd.DataFrame(_tol_rows)
+        st.dataframe(_tol_df, hide_index=True, use_container_width=True)
+        if _rolled.get("n_rows"):
+            st.caption(
+                f"+ {_rolled['n_rows']} additional zone–soil combination(s) within tolerable limit."
+            )
+    else:
+        st.success("All zones within tolerable limit for their soils.")
+        if _rolled.get("n_rows"):
+            st.caption(
+                f"{_rolled['n_rows']} zone–soil combination(s) evaluated, all within tolerable limit."
+            )
+    st.caption(
+        "A = modeled soil loss (R·K·LS·C) per soil map unit; A/T compares it to that "
+        "soil's tolerance T. Acres rounded to the nearest 0.5 ac. Simplified RUSLE "
+        "advisory estimate (±10 pt uncertainty) — not a substitute for a site-specific "
+        "RUSLE2 run or official NRCS determination."
+    )
 
 # Hoist image date string — used in Section 4 and PDF call
 _s_latest   = st.session_state.ndvi_scene_latest

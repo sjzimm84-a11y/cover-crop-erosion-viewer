@@ -139,14 +139,18 @@ def fetch_soil_components(mukeys: list[str]) -> pd.DataFrame:
         component has two horizons sharing the minimum depth) are de-duplicated,
         keeping the first.
     """
-    cols = ["mukey", "cokey", "comppct_r", "drainagecl",
+    cols = ["mukey", "musym", "cokey", "comppct_r", "drainagecl",
             "hydgrp", "tfact", "kwfact", "ksat_r"]
     if not mukeys:
         return pd.DataFrame(columns=cols)
 
     in_list = ",".join(f"'{m}'" for m in mukeys)
+    # musym is a mapunit-level attribute (one value per mukey); selecting it from
+    # the already-joined mapunit table is functionally dependent on mu.mukey and
+    # does NOT change row cardinality, so the component-level comppct_r weighting
+    # below is unaffected.
     sql = f"""
-        SELECT mu.mukey, c.cokey, c.comppct_r, c.drainagecl, c.hydgrp,
+        SELECT mu.mukey, mu.musym, c.cokey, c.comppct_r, c.drainagecl, c.hydgrp,
                c.tfact, ch.kwfact, ch.ksat_r
         FROM mapunit mu
         JOIN component c ON mu.mukey = c.mukey
@@ -170,7 +174,7 @@ def fetch_soil_components(mukeys: list[str]) -> pd.DataFrame:
         df[numeric_col] = pd.to_numeric(df[numeric_col], errors="coerce")
 
     # Trim whitespace from categorical text (SDA pads e.g. 'No ').
-    for text_col in ("drainagecl", "hydgrp"):
+    for text_col in ("drainagecl", "hydgrp", "musym"):
         df[text_col] = df[text_col].astype("string").str.strip()
 
     return df
@@ -211,10 +215,14 @@ def component_weighted(df: pd.DataFrame) -> dict:
 
     for mukey, sub in df.groupby("mukey"):
         dominant = sub.loc[sub["comppct_r"].idxmax()] if sub["comppct_r"].notna().any() else sub.iloc[0]
+        # musym is mapunit-level (constant across this group's component rows);
+        # carried through verbatim, it does not participate in the weighting.
+        _musym = dominant["musym"] if "musym" in sub.columns else None
         result[str(mukey)] = {
             "k": _weighted_mean(sub, "kwfact"),
             "t": _weighted_mean(sub, "tfact"),
             "ksat": _weighted_mean(sub, "ksat_r"),
+            "musym": (None if pd.isna(_musym) else str(_musym)),
             "drainagecl": (None if pd.isna(dominant["drainagecl"])
                            else str(dominant["drainagecl"])),
             "hydgrp": (None if pd.isna(dominant["hydgrp"])
@@ -529,14 +537,27 @@ def zone_mukey_tolerance_rows(
     zone_labels: Optional[dict] = None,
     overlap_floor_acres: float = 0.5,
     acre_crs: Optional[str] = None,
+    k_by_mukey: Optional[dict] = None,
+    musym_by_mukey: Optional[dict] = None,
+    k_field: Optional[float] = None,
 ) -> dict:
     """Per-(risk-zone x map-unit) soil-tolerance rows with projected acreage.
 
     Intersects each Risk zone geometry with every SSURGO map-unit polygon and
-    emits one row per overlapping ``(zone, mukey)`` pair. This is the Plan-B
-    readable surface on top of the Phase-3 zone-T machinery: it does not change
-    any RUSLE/T computation, only joins each zone's soil-loss ``A`` to the
-    component-weighted ``T`` of each map unit it overlaps.
+    emits one row per ``(zone, mukey)`` pair (polygon fragments of the same map
+    unit in the same zone are POOLED — their overlap acres are summed into a
+    single row). This is the Plan-B readable surface on top of the Phase-3
+    zone-T machinery: it does not change any RUSLE/T computation.
+
+    Per-soil A (rescale identity, not a recompute): the supplied ``a_by_zone``
+    value is the zone soil loss ``A = R·K_field·LS_zone·C_zone`` (computed with
+    the FIELD area-weighted K). When ``k_by_mukey`` and ``k_field`` (>0) are
+    provided, each row's A is rescaled to that map unit's own erodibility:
+    ``A_row = a_zone * (K_mukey / K_field)`` = ``R·K_mukey·LS_zone·C_zone`` —
+    LS and C are zone (slope/NDVI) properties and are NOT re-derived per soil.
+    ``A/T`` and severity (Tech Guide v1.8 bands) are derived from ``A_row`` and
+    the map unit's own T. When the K inputs are absent the row A falls back to
+    the unscaled zone A (backward-compatible).
 
     Geometric guards:
         * G1 - intersection is performed in the CRS the inputs are supplied in,
@@ -553,27 +574,48 @@ def zone_mukey_tolerance_rows(
     Args:
         zone_geometries: ``{zone_val(int 1-4): shapely geometry}`` in WGS84.
         mupolygons: ``[(mukey, geometry, t_value), ...]`` in WGS84; ``t_value``
-            may be ``None``.
-        a_by_zone: ``{zone_val OR zone_label: A_current}`` RUSLE soil loss per
-            zone (from the zone erosion summary). Used for ``within_t_zone``.
+            may be ``None``. Multiple entries with the same ``mukey`` are pooled.
+        a_by_zone: ``{zone_val OR zone_label: A_current}`` zone RUSLE soil loss
+            (computed with the field area-weighted K).
         zone_labels: ``{zone_val: label}``; defaults to Low/Moderate/High/Critical.
-        overlap_floor_acres: rows below this overlap acreage are rolled into the
-            summary rather than surfaced as flagged.
+        overlap_floor_acres: rows below this POOLED overlap acreage are rolled
+            into the summary rather than surfaced as flagged.
         acre_crs: projected CRS for acreage; auto-derived UTM when ``None``.
+        k_by_mukey: ``{mukey: K}`` per-soil erodibility, for the per-soil A
+            rescale. When absent, A is the unscaled zone A (backward-compatible).
+        musym_by_mukey: ``{mukey: musym}`` map-unit symbols for display.
+        k_field: the field area-weighted K used in ``a_by_zone``; required (>0)
+            for the per-soil rescale.
 
     Returns:
         ``{"rows_full", "rows_flagged", "rolled_summary", "intersect_crs",
-           "acre_crs"}``. ``rows_flagged`` are rows where ``within_t_zone is
-        False AND overlap_acres >= overlap_floor_acres``; every other row is
-        aggregated into ``rolled_summary`` (``n_rows`` / ``overlap_acres``).
-        Each row: ``risk_zone, zone_val, mukey, soil_T, a_zone, within_t_zone,
-        overlap_acres``.
+           "acre_crs"}``, with ``rows_full`` sorted by ``a_over_t`` descending
+        (worst first). ``rows_flagged`` are rows where ``within_t_zone is False
+        AND overlap_acres >= overlap_floor_acres``; every other row feeds
+        ``rolled_summary``. Each row: ``risk_zone, zone_val, mukey, musym,
+        soil_T, a_zone, a_over_t, severity, within_t_zone, overlap_acres`` —
+        where ``a_zone`` is the per-soil A_row.
     """
     from shapely.ops import transform as _shp_transform
     from pyproj import Transformer
 
     labels = zone_labels or {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
-    a_by_zone = a_by_zone or {}
+    a_by_zone      = a_by_zone or {}
+    k_by_mukey     = k_by_mukey or {}
+    musym_by_mukey = musym_by_mukey or {}
+    _rescale_ok    = k_field is not None and k_field > 0
+
+    def _severity(ratio: Optional[float]) -> Optional[str]:
+        # Technical Guide v1.8 bands (verbatim, with the documented <= edges).
+        if ratio is None:
+            return None
+        if ratio <= 1.0:
+            return "Within tolerable limit"
+        if ratio <= 2.0:
+            return "Near tolerable limit"
+        if ratio <= 5.0:
+            return "Exceeds tolerable limit"
+        return "Significantly exceeds limit"
 
     empty = {
         "rows_full": [], "rows_flagged": [],
@@ -603,14 +645,13 @@ def zone_mukey_tolerance_rows(
             acre_crs = "EPSG:5070"  # CONUS Albers equal-area fallback
     _to_proj = Transformer.from_crs("EPSG:4326", acre_crs, always_xy=True).transform
 
-    rows_full, rows_flagged = [], []
-    rolled = {"n_rows": 0, "overlap_acres": 0.0}
-
+    # Accumulate one row per (zone_val, mukey); pool fragment acres into it.
+    agg: dict = {}
     for zone_val, zgeom in zone_geometries.items():
         zg = _repair(zgeom)
         if zg is None:
             continue
-        label = labels.get(zone_val)
+        label  = labels.get(zone_val)
         a_zone = a_by_zone.get(zone_val, a_by_zone.get(label))
 
         for mk, mgeom, t_val in repaired_mu:
@@ -627,25 +668,50 @@ def zone_mukey_tolerance_rows(
             if acres <= 0:
                 continue
 
-            within = (bool(a_zone <= t_val)
-                      if (a_zone is not None and t_val is not None) else None)
-            row = {
-                "risk_zone":     label,
-                "zone_val":      int(zone_val),
-                "mukey":         mk,
-                "soil_T":        t_val,
-                "a_zone":        round(float(a_zone), 2) if a_zone is not None else None,
-                "within_t_zone": within,
-                "overlap_acres": round(float(acres), 2),
-            }
-            rows_full.append(row)
-            if within is False and acres >= overlap_floor_acres:
-                rows_flagged.append(row)
-            else:
-                rolled["n_rows"] += 1
-                rolled["overlap_acres"] += acres
+            key = (zone_val, mk)
+            if key not in agg:
+                # Per-soil A: rescale the zone A by this map unit's own K
+                # (A_row = R·K_mukey·LS_zone·C_zone). LS/C are NOT re-derived.
+                k_mukey = k_by_mukey.get(mk)
+                if _rescale_ok and k_mukey is not None and a_zone is not None:
+                    a_row = float(a_zone) * (float(k_mukey) / float(k_field))
+                else:
+                    a_row = float(a_zone) if a_zone is not None else None
 
+                ratio  = (a_row / t_val) if (a_row is not None and t_val) else None
+                within = (bool(a_row <= t_val)
+                          if (a_row is not None and t_val is not None) else None)
+                agg[key] = {
+                    "risk_zone":     label,
+                    "zone_val":      int(zone_val),
+                    "mukey":         mk,
+                    "musym":         musym_by_mukey.get(mk),
+                    "soil_T":        t_val,
+                    "a_zone":        round(a_row, 2) if a_row is not None else None,
+                    "a_over_t":      round(ratio, 2) if ratio is not None else None,
+                    "severity":      _severity(ratio),
+                    "within_t_zone": within,
+                    "overlap_acres": 0.0,
+                }
+            agg[key]["overlap_acres"] += acres
+
+    rows_full = list(agg.values())
+    for r in rows_full:
+        r["overlap_acres"] = round(r["overlap_acres"], 2)
+    # Worst first: sort by A/T descending (None ratios sink to the bottom).
+    rows_full.sort(key=lambda r: (r["a_over_t"] if r["a_over_t"] is not None else -1.0),
+                   reverse=True)
+
+    rows_flagged = []
+    rolled = {"n_rows": 0, "overlap_acres": 0.0}
+    for r in rows_full:
+        if r["within_t_zone"] is False and r["overlap_acres"] >= overlap_floor_acres:
+            rows_flagged.append(r)
+        else:
+            rolled["n_rows"] += 1
+            rolled["overlap_acres"] += r["overlap_acres"]
     rolled["overlap_acres"] = round(rolled["overlap_acres"], 2)
+
     return {
         "rows_full": rows_full,
         "rows_flagged": rows_flagged,

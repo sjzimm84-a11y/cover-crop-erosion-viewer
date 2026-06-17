@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import base64
 from io import BytesIO
 
@@ -11,6 +11,46 @@ import rasterio
 from folium import GeoJson
 from PIL import Image
 from rasterio.warp import transform_bounds
+from shapely.geometry import mapping
+
+# Soil-tolerance (T) color ramp — ABSOLUTE scale keyed to actual T-values,
+# consistent across every field. Blue = more tolerant (high T), orange = less
+# tolerant / "attention" (low/fragile T). Colorblind-safe blue↔orange palette.
+# Fields whose units are all T=5 render uniformly blue — that is the correct
+# "no fragile ground" signal; within-field detail lives in the flagged table,
+# not the color. T-value bins (tons/ac/yr):
+#     T <= 3  -> deep orange   (most fragile)
+#     T == 4  -> orange
+#     T == 5  -> blue
+#     T >= 6  -> deep blue      (most tolerant)
+_SOIL_T_DEEP_ORANGE = "#D85A30"   # T <= 3  most fragile (attention)
+_SOIL_T_ORANGE      = "#EF9F27"   # T == 4
+_SOIL_T_BLUE        = "#0C447C"   # T == 5
+_SOIL_T_DEEP_BLUE   = "#06264A"   # T >= 6  most tolerant
+_SOIL_T_NODATA      = "#888888"
+
+
+def _soil_ramp_colors(t_values=None):
+    """Return a ``T -> hex`` color function on the FIXED absolute T scale.
+
+    The mapping is independent of the field's T distribution (``t_values`` is
+    accepted and ignored for call-site compatibility), so the same T renders the
+    same color in every field. Bins: T<=3 deep orange, T==4 orange, T==5 blue,
+    T>=6 deep blue; missing T renders grey.
+    """
+    def color(t: Optional[float]) -> str:
+        if t is None:
+            return _SOIL_T_NODATA
+        t = float(t)
+        if t <= 3.5:
+            return _SOIL_T_DEEP_ORANGE   # T <= 3 (with rounding headroom)
+        if t < 4.5:
+            return _SOIL_T_ORANGE        # T == 4
+        if t < 5.5:
+            return _SOIL_T_BLUE          # T == 5
+        return _SOIL_T_DEEP_BLUE         # T >= 6
+
+    return color
 
 
 def build_map_with_rasters(
@@ -24,6 +64,7 @@ def build_map_with_rasters(
     zoom_start: int = 15,
     ndvi_threshold: float = 0.20,
     risk_zone_array: np.ndarray = None,
+    soil_polygons: Optional[list] = None,
 ) -> folium.Map:
     # Expose threshold to colormap logic below
     ndvi_opacity_threshold = ndvi_threshold
@@ -134,6 +175,48 @@ def build_map_with_rasters(
         name="Slope (red=steep, blue=flat)", show=True,
     ).add_to(m)
 
+    # --- SSURGO soil map-unit layer (optional, OFF by default) ---
+    # Added BEFORE the Risk Index overlay so it sits beneath it. Each polygon is
+    # colored by ITS OWN per-mukey T on the blue→orange ramp (low T = orange =
+    # attention). Geometries are WGS84 shapely; tooltip shows musym / T / K.
+    if soil_polygons:
+        _color_for = _soil_ramp_colors([_sp.get("t") for _sp in soil_polygons])
+        _features = []
+        for _sp in soil_polygons:
+            _geom = _sp.get("geometry")
+            if _geom is None or _geom.is_empty:
+                continue
+            _t = _sp.get("t")
+            _k = _sp.get("k")
+            _musym = _sp.get("musym") or f"mukey {_sp.get('mukey')}"
+            _features.append({
+                "type": "Feature",
+                "geometry": mapping(_geom),
+                "properties": {
+                    "musym": _musym,
+                    "T": "n/a" if _t is None else round(float(_t), 1),
+                    "K": "n/a" if _k is None else round(float(_k), 3),
+                    "_color": _color_for(None if _t is None else float(_t)),
+                },
+            })
+        if _features:
+            folium.GeoJson(
+                {"type": "FeatureCollection", "features": _features},
+                name="SSURGO Soil Map Units (by T)",
+                show=False,
+                style_function=lambda feat: {
+                    "fillColor": feat["properties"]["_color"],
+                    "color": "#1b1f24",
+                    "weight": 0.7,
+                    "fillOpacity": 0.55,
+                },
+                highlight_function=lambda feat: {"weight": 2, "color": "#f0c040"},
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["musym", "T", "K"],
+                    aliases=["Map unit:", "T (t/ac/yr):", "K factor:"],
+                ),
+            ).add_to(m)
+
     # --- Risk Index Zones layer (optional) ---
     if risk_zone_array is not None:
         ZONE_COLORS = {
@@ -177,6 +260,12 @@ def build_map_with_rasters(
         <span style="color:#FACC15;">&#9632;</span> Moderate &nbsp;
         <span style="color:#F97316;">&#9632;</span> High &nbsp;
         <span style="color:#EF4444;">&#9632;</span> Critical
+        <hr style="border-color:#30363d;margin:6px 0;">
+        <b style="color:#79c0ff;">Soil Tolerance T (t/ac/yr)</b><br>
+        <span style="color:#D85A30;">&#9632;</span> T&le;3 &nbsp;
+        <span style="color:#EF9F27;">&#9632;</span> T=4 &nbsp;
+        <span style="color:#0C447C;">&#9632;</span> T=5 &nbsp;
+        <span style="color:#06264A;">&#9632;</span> T&ge;6
     </div>
     """
     m.get_root().html.add_child(folium.Element(colorbar_html))
