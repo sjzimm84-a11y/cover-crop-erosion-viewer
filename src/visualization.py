@@ -26,6 +26,32 @@ _LABEL_MIN_ACRES = 0.5
 _SOIL_NEUTRAL_FILL    = "#9aa0a6"
 _SOIL_NEUTRAL_OUTLINE = "#5a6068"
 
+# Shared legend rows (color swatches + labels). Single source of truth used both
+# for the in-map Leaflet control (standalone/exported HTML) and the native
+# Streamlit legend rendered beneath the map in the app (streamlit-folium strips
+# the in-map control, so the native copy is what users actually see).
+LEGEND_ROWS_HTML = """
+        <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
+        <span style="color:#F97316;">&#9632;</span> Low Cover<br>
+        <span style="color:#38BDF8;">&#9632;</span> Marginal<br>
+        <span style="color:#FACC15;">&#9632;</span> Good Cover<br>
+        <hr style="border-color:#30363d;margin:6px 0;">
+        <b style="color:#79c0ff;">Slope</b><br>
+        <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
+        <span style="color:#ffffbf;">&#9632;</span> Moderate &nbsp;
+        <span style="color:#4575b4;">&#9632;</span> Flat<br>
+        <hr style="border-color:#30363d;margin:6px 0;">
+        <b style="color:#79c0ff;">Risk Index Zones (C&times;LS)</b><br>
+        <span style="color:#22C55E;">&#9632;</span> Low &nbsp;
+        <span style="color:#FACC15;">&#9632;</span> Moderate &nbsp;
+        <span style="color:#F97316;">&#9632;</span> High &nbsp;
+        <span style="color:#EF4444;">&#9632;</span> Critical
+        <hr style="border-color:#30363d;margin:6px 0;">
+        <b style="color:#79c0ff;">Flagged Soil (A vs T)</b><br>
+        <span style="color:#EF9F27;">&#9632;</span> Exceeds (2&ndash;5&times;T) &nbsp;
+        <span style="color:#D85A30;">&#9632;</span> Significantly (&gt;5&times;T)
+    """
+
 
 def _text_label_marker(lat: float, lon: float, text: str) -> folium.Marker:
     """A small DivIcon text marker centered on (lat, lon).
@@ -351,32 +377,12 @@ def build_map_with_rasters(
                 _text_label_marker(_lat, _lon, _txt).add_to(_flag_group)
             _flag_group.add_to(m)
 
-    # Legend content only (no positioning wrapper) — _add_legend_control wraps it
-    # in a Leaflet control so it renders reliably inside the map container under
-    # streamlit-folium, where a position:fixed body div gets clipped/hidden.
-    legend_inner_html = """
-        <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
-        <span style="color:#F97316;">&#9632;</span> Low Cover<br>
-        <span style="color:#38BDF8;">&#9632;</span> Marginal<br>
-        <span style="color:#FACC15;">&#9632;</span> Good Cover<br>
-        <hr style="border-color:#30363d;margin:6px 0;">
-        <b style="color:#79c0ff;">Slope</b><br>
-        <span style="color:#d73027;">&#9632;</span> Steep &nbsp;
-        <span style="color:#ffffbf;">&#9632;</span> Moderate &nbsp;
-        <span style="color:#4575b4;">&#9632;</span> Flat<br>
-        <hr style="border-color:#30363d;margin:6px 0;">
-        <b style="color:#79c0ff;">Risk Index Zones (C&times;LS)</b><br>
-        <span style="color:#22C55E;">&#9632;</span> Low &nbsp;
-        <span style="color:#FACC15;">&#9632;</span> Moderate &nbsp;
-        <span style="color:#F97316;">&#9632;</span> High &nbsp;
-        <span style="color:#EF4444;">&#9632;</span> Critical
-        <hr style="border-color:#30363d;margin:6px 0;">
-        <b style="color:#79c0ff;">Flagged Soil (A vs T)</b><br>
-        <span style="color:#EF9F27;">&#9632;</span> Exceeds (2&ndash;5&times;T) &nbsp;
-        <span style="color:#D85A30;">&#9632;</span> Significantly (&gt;5&times;T)
-    """
+    # In-map legend (works for standalone/exported HTML). NOTE: streamlit-folium
+    # strips custom Leaflet controls, so the app ALSO renders LEGEND_ROWS_HTML as
+    # a native Streamlit block beneath the map — that is the copy users see in the
+    # app. Both share LEGEND_ROWS_HTML so the content cannot drift.
     folium.LayerControl().add_to(m)
-    _add_legend_control(m, legend_inner_html)
+    _add_legend_control(m, LEGEND_ROWS_HTML)
     m.fit_bounds([sw, ne])
     return m
 

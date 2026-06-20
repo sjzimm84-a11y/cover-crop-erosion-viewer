@@ -30,7 +30,7 @@ from src.scoring import (
     compute_ndvi_zone_summary,
     RESIDUE_OPTIONS,
 )
-from src.visualization import build_map_with_rasters, build_zone_risk_chart
+from src.visualization import build_map_with_rasters, build_zone_risk_chart, LEGEND_ROWS_HTML
 from src.report_generator import generate_field_report, generate_producer_report
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
@@ -814,6 +814,21 @@ try:
 except ImportError:
     # Fallback if streamlit-folium not installed
     st.components.v1.html(folium_map._repr_html_(), height=520)
+
+# Map legend — native Streamlit block beneath the map. streamlit-folium strips
+# the in-map Leaflet control, so THIS is the legend users actually see; the
+# standalone/exported map still carries the in-map copy. Both share
+# LEGEND_ROWS_HTML (single source of truth). Dedent so Streamlit's markdown
+# doesn't treat the indented HTML as a code block.
+import textwrap as _textwrap
+st.markdown(
+    '<div style="background:rgba(14,17,23,0.88);padding:10px 16px;border-radius:8px;'
+    'border:1px solid #30363d;font-family:monospace;font-size:12px;color:#c9d1d9;'
+    'display:inline-block;line-height:1.5;">'
+    + _textwrap.dedent(LEGEND_ROWS_HTML).strip()
+    + '</div>',
+    unsafe_allow_html=True,
+)
 
 with st.expander("How are risk zones calculated?"):
     st.markdown("""
