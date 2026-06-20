@@ -891,6 +891,85 @@ def generate_field_report(
         story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
+    # SOIL-LOSS TOLERANCE BY RISK ZONE × SOIL  (per-map-unit A/T, FULL list)
+    # Adjacent to "Erosion Reduction by Risk Zone" (both zone-level erosion
+    # content). Severity is read verbatim from rows_full — the SAME source the
+    # app table uses — so wording matches exactly. reportlab splits long tables
+    # natively at row boundaries; repeatRows=1 repeats the header on each page.
+    # Omitted entirely on WSS-fallback runs where zone_mukey_tolerance is absent.
+    # -----------------------------------------------------------------------
+    _zmt_rows = (risk_result.get("zone_mukey_tolerance") or {}).get("rows_full") or []
+    if _zmt_rows:
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=MID_GRAY, spaceAfter=4))
+        story.append(Paragraph("Soil-Loss Tolerance by Risk Zone × Soil", section_style))
+
+        # Sort A/T descending, None ratios last (matches the app "show all" view).
+        _zmt_sorted = sorted(
+            _zmt_rows,
+            key=lambda r: (r["a_over_t"] if r.get("a_over_t") is not None else -1.0),
+            reverse=True,
+        )
+        _tol_data = [[
+            "Risk Zone", "Soil (musym)", "T", "A/T", "Severity", "Acres", "A (t/ac/yr)",
+        ]]
+        for _r in _zmt_sorted:
+            _aot = _r.get("a_over_t")
+            _ac  = _r.get("overlap_acres")
+            _az  = _r.get("a_zone")
+            _tv  = _r.get("soil_T")
+            _tol_data.append([
+                _r.get("risk_zone", ""),
+                str(_r.get("musym") or _r.get("mukey") or ""),
+                (f"{_tv:g}"      if _tv  is not None else ""),
+                (f"{_aot:.1f}×" if _aot is not None else ""),
+                _r.get("severity") or "",
+                (f"{_ac:.2f}"    if _ac  is not None else ""),
+                (f"{_az:.1f}"    if _az  is not None else ""),
+            ])
+        _tol_tbl = Table(
+            _tol_data,
+            colWidths=[1.0*inch, 1.0*inch, 0.5*inch, 0.65*inch, 2.25*inch,
+                       0.8*inch, 0.85*inch],
+            repeatRows=1,
+        )
+        _tol_style = TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.0),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+            ("FONTNAME",      (0, 1), (0, -1),  "Helvetica-Bold"),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ])
+        # Color the Severity cell by Tech Guide tier (mirrors the zone table's
+        # per-zone label coloring; the wording itself is unchanged).
+        _sev_color = {
+            "Within tolerable limit":      GREEN_BADGE,
+            "Near tolerable limit":        AMBER_BADGE,
+            "Exceeds tolerable limit":     RED_BADGE,
+            "Significantly exceeds limit": colors.HexColor("#6e1c1c"),
+        }
+        for _ri, _r in enumerate(_zmt_sorted, start=1):
+            _sc = _sev_color.get(_r.get("severity"))
+            if _sc is not None:
+                _tol_style.add("TEXTCOLOR", (4, _ri), (4, _ri), _sc)
+        _tol_tbl.setStyle(_tol_style)
+        story.append(_tol_tbl)
+        story.append(Paragraph(
+            "<i>A = modeled soil loss (R·K·LS·C) per soil map unit; A/T compares it "
+            "to that soil's tolerance T. All zone–soil combinations shown, sorted by A/T "
+            "descending. Simplified RUSLE advisory estimate (±10 pt uncertainty) — not a "
+            "substitute for a site-specific RUSLE2 run or official NRCS determination.</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
     # ESTIMATED SOIL LOSS vs. SOIL LOSS TOLERANCE
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
@@ -943,9 +1022,9 @@ def generate_field_report(
             ("LEFTPADDING",   (0, 0), (-1, -1), 6),
         ]))
         story.append(sl_table)
-        _r_note = r_factor_note or f"R={r_factor:.0f} (Iowa erosivity index)"
+        _r_note = r_factor_note or f"R={r_factor:.0f} (erosivity index)"
         story.append(Paragraph(
-            f"<i>Iowa R-factor: {_r_note} | "
+            f"<i>RUSLE R-factor: {_r_note} | "
             f"A = R \u00d7 K \u00d7 LS \u00d7 C (P=1.0). Simplified RUSLE estimate for advisory "
             f"use only \u2014 not a substitute for a site-specific RUSLE2 run or official "
             f"NRCS determination.</i>",
@@ -1020,6 +1099,8 @@ def generate_field_report(
     footer_lines = [
         f"NDVI Source: Sentinel-2 via Google Earth Engine ({ndvi_date_str}) | "
         f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
+        f"Data provenance — DEM source: {dem_source}  |  "
+        f"R-factor source: {r_factor_note or 'R=%.0f' % r_factor}",
         "C-Factor methodology: Continuous exponential model \u2014 "
         "C(NDVI) = floor + (intercept \u2212 floor) \u00d7 exp(\u2212k \u00d7 NDVI). "
         "Parameters derived from published RUSLE2 value ranges for Iowa cropland; residue system "
@@ -1605,6 +1686,8 @@ def generate_producer_report(
     footer_lines = [
         f"NDVI Source: Sentinel-2 via Google Earth Engine ({ndvi_date_str}) | "
         f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
+        f"Data provenance — DEM source: {dem_source}  |  "
+        f"R-factor source: {r_factor_note or 'R=%.0f' % r_factor}",
         "C-Factor methodology: piecewise exponential NDVI model — "
         "continuous C-factor differentiated by residue system. "
         "This report is advisory only and does not constitute an official NRCS determination.",

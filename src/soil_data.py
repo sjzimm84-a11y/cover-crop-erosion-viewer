@@ -593,8 +593,10 @@ def zone_mukey_tolerance_rows(
         (worst first). ``rows_flagged`` are rows where ``within_t_zone is False
         AND overlap_acres >= overlap_floor_acres``; every other row feeds
         ``rolled_summary``. Each row: ``risk_zone, zone_val, mukey, musym,
-        soil_T, a_zone, a_over_t, severity, within_t_zone, overlap_acres`` —
-        where ``a_zone`` is the per-soil A_row.
+        soil_T, a_zone, a_over_t, severity, within_t_zone, overlap_acres,
+        geometry`` — where ``a_zone`` is the per-soil A_row and ``geometry`` is
+        the WGS84 zone∩mukey intersection (shapely; ``None`` if unavailable),
+        provided for map rendering only — it never enters the table or math.
     """
     from shapely.ops import transform as _shp_transform
     from pyproj import Transformer
@@ -692,8 +694,14 @@ def zone_mukey_tolerance_rows(
                     "severity":      _severity(ratio),
                     "within_t_zone": within,
                     "overlap_acres": 0.0,
+                    "geometry":      None,   # WGS84 zone∩mukey union (for map outline)
                 }
             agg[key]["overlap_acres"] += acres
+            # Retain the actual intersection geometry (WGS84), unioning the
+            # fragments that share this (zone_val, mukey) key. Used only for
+            # map rendering — never enters the tolerance/acreage math above.
+            _g = agg[key]["geometry"]
+            agg[key]["geometry"] = inter if _g is None else _repair(_g.union(inter))
 
     rows_full = list(agg.values())
     for r in rows_full:

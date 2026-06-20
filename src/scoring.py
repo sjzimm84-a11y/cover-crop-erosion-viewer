@@ -32,6 +32,7 @@ Limitation — LS-factor:
 """
 
 from typing import Dict, Any, Optional
+from pathlib import Path
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -172,58 +173,117 @@ SPECIES_C_TARGETS = {
 }
 
 
-def get_iowa_r_factor(boundary_gdf) -> tuple:
+# ---------------------------------------------------------------------------
+# National R-factor (rainfall erosivity) raster — NOAA Office for Coastal
+# Management "R-Factor for the Conterminous United States", derived from the
+# Ag Handbook 703 isoerodent maps (Renard et al., 1997), clipped to the Midwest
+# target area (IA, IL, MN, WI, MO + buffer). EPSG:5070, US-customary units
+# (hundreds ft-tonf-in / ac-h-yr) — the SAME scale as A = R·K·LS·C expects, so
+# no unit conversion is applied. Acknowledgement: NOAA OCM and Renard et al. 1997.
+# ---------------------------------------------------------------------------
+R_FACTOR_RASTER = (
+    Path(__file__).resolve().parent.parent / "data" / "R-Factor_Midwest.tif"
+)
+# Midwest-representative default used only when the field falls outside the
+# bundled raster footprint (the note makes this explicit for the user).
+R_FACTOR_FALLBACK = 150.0
+
+
+def _sample_r_factor(lat: float, lon: float) -> Optional[float]:
+    """Sample the bundled Midwest R-factor raster at a lon/lat point.
+
+    Returns the R value (US customary) or None if the point is outside the
+    raster footprint / on nodata.
     """
-    Look up Iowa R-factor zone from field centroid using FCC Census Block API.
-    Returns (r_factor: float, source_note: str, county_display: str | None).
-    county_display is formatted as "Name County, IA" for use in reports,
-    or None if the lookup fails.
-    Northwest Iowa counties use R=150; all other Iowa counties default to
-    R=175 per Iowa NRCS FOTG Section I USLE Figure 2 (September 2002).
-    Falls back to R=175 if the API call fails.
+    import rasterio
+    from rasterio.warp import transform as _warp_transform
+
+    with rasterio.open(R_FACTOR_RASTER) as ds:
+        xs, ys = _warp_transform("EPSG:4326", ds.crs, [lon], [lat])
+        val = float(next(ds.sample([(xs[0], ys[0])]))[0])
+    # nodata sentinel is a large negative float; any non-positive value is
+    # outside meaningful Midwest coverage.
+    if not np.isfinite(val) or val <= 0:
+        return None
+    return val
+
+
+def _fcc_county_state(lat: float, lon: float) -> Optional[str]:
+    """Return ``"<County> County, <ST>"`` from the FCC Census Block API.
+
+    Returns None if the lookup fails or is incomplete, so the report's county
+    field is left blank for the user to populate rather than guessing a state.
     """
     import urllib.request
     import json as _json
 
     try:
-        # Centroid computed in a projected CRS (UTM) then converted back to
-        # lon/lat, avoiding the "geographic CRS centroid likely incorrect"
-        # warning. County lookup is unaffected (sub-metre centroid shift).
+        url = (
+            f"https://geo.fcc.gov/api/census/block/find"
+            f"?latitude={lat:.6f}&longitude={lon:.6f}&format=json"
+        )
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = _json.loads(resp.read())
+        county_raw = ((data.get("County") or {}).get("name") or "")
+        state_code = ((data.get("State") or {}).get("code") or "")
+        county = (county_raw.lower().replace(" county", "").strip())
+        if county and state_code:
+            return f"{county.title()} County, {state_code.upper()}"
+        if county:
+            return f"{county.title()} County"
+        return None
+    except Exception:
+        return None
+
+
+def get_r_factor(boundary_gdf) -> tuple:
+    """
+    Determine the RUSLE R-factor for a field by sampling the bundled national
+    R-factor raster at the field centroid, and look up the county/state label
+    via the FCC Census Block API (for report display only).
+
+    Returns ``(r_factor: float, source_note: str, location_display: str | None)``.
+    R-factor units are US customary (hundreds ft-tonf-in / ac-h-yr), matching the
+    A = R·K·LS·C soil-loss math. ``location_display`` is ``"<County> County, <ST>"``
+    or **None** when the FCC lookup is unavailable (left blank for the user).
+    """
+    # Field centroid in lon/lat — projected centroid avoids the geographic-CRS
+    # centroid warning (sub-metre shift is irrelevant for R sampling / lookup).
+    try:
         _gdf_ll  = boundary_gdf.to_crs("EPSG:4326")
         centroid = (_gdf_ll.to_crs(_gdf_ll.estimate_utm_crs())
                     .geometry.centroid.to_crs("EPSG:4326").iloc[0])
         lat, lon = centroid.y, centroid.x
-        url = (
-            f"https://geo.fcc.gov/api/census/block/find"
-            f"?latitude={lat:.6f}&longitude={lon:.6f}"
-            f"&format=json"
-        )
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            data = _json.loads(resp.read())
-        county_raw     = data.get("County", {}).get("name", "")
-        county_name    = (county_raw.lower()
-                          .replace(" county", "").strip())
-        county_display = f"{county_name.title()} County, IA" if county_name else None
-        if county_name in IOWA_R_FACTOR_150_COUNTIES:
-            return (
-                150.0,
-                f"R=150 (northwest Iowa — "
-                f"{county_name.title()} County, NRCS FOTG)",
-                county_display,
-            )
-        note = (
-            f"R=175 (standard Iowa — "
-            f"{county_name.title()} County, NRCS FOTG)"
-            if county_name
-            else "R=175 (standard Iowa zone, NRCS FOTG)"
-        )
-        return (175.0, note, county_display)
     except Exception:
         return (
-            175.0,
-            "R=175 (default — county lookup unavailable, NRCS FOTG)",
+            R_FACTOR_FALLBACK,
+            f"R={R_FACTOR_FALLBACK:.0f} (default — could not locate field centroid)",
             None,
         )
+
+    # R-factor from the bundled raster (primary source).
+    try:
+        r_sampled = _sample_r_factor(lat, lon)
+    except Exception:
+        r_sampled = None
+
+    if r_sampled is not None:
+        r_factor = float(round(r_sampled))
+        r_note = f"R={r_factor:.0f} (USDA AH703 erosivity, NOAA Midwest raster)"
+    else:
+        r_factor = R_FACTOR_FALLBACK
+        r_note = (
+            f"R={r_factor:.0f} (default — field outside bundled R-factor "
+            "coverage; verify manually)"
+        )
+
+    # County/state label for the report (display only; blank on failure).
+    location_display = _fcc_county_state(lat, lon)
+    return (r_factor, r_note, location_display)
+
+
+# Backward-compatible alias (legacy import name).
+get_iowa_r_factor = get_r_factor
 
 
 def estimate_soil_loss(

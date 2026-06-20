@@ -384,11 +384,8 @@ try:
         boundary_gdf=field_boundary,
         uploaded_dem_path=dem_path,
     )
-    if dem_source == "Iowa 3m WCS (auto)":
-        st.success(f"🛰️ DEM auto-fetched from Iowa 3-meter Digital Elevation Model (Iowa DNR)")
-        st.session_state.dem_source_label = "Iowa 3-meter Digital Elevation Model (Iowa DNR)"
-    else:
-        st.info(f"📁 DEM source: {dem_source}")
+    st.session_state.dem_source_label = dem_source
+    st.info(f"📁 DEM source: {dem_source}")
 except Exception as exc:
     st.error(f"Could not load DEM: {exc}")
     st.stop()
@@ -474,18 +471,21 @@ except Exception:
     st.session_state.soil_k_factor = None
 
 # ---------------------------------------------------------------------------
-# Iowa R-factor zone lookup (FCC Census Block API)
+# R-factor lookup — bundled national erosivity raster (R value) + FCC Census
+# Block API (county/state label only; left blank if the API is unavailable).
 # ---------------------------------------------------------------------------
 try:
-    from src.scoring import get_iowa_r_factor
-    _r_factor, _r_factor_note, _county_display = get_iowa_r_factor(field_boundary)
+    from src.scoring import get_r_factor
+    _r_factor, _r_factor_note, _county_display = get_r_factor(field_boundary)
     st.session_state.r_factor      = _r_factor
     st.session_state.r_factor_note = _r_factor_note
+    st.session_state.r_factor_is_fallback = "default" in _r_factor_note.lower()
     if _county_display:
         st.session_state.county_name = _county_display
 except Exception:
-    st.session_state.r_factor      = 175.0
-    st.session_state.r_factor_note = "R=175 (default — county lookup failed, standard Iowa)"
+    st.session_state.r_factor      = 150.0
+    st.session_state.r_factor_note = "R=150 (default — R-factor lookup failed)"
+    st.session_state.r_factor_is_fallback = True
 
 # ---------------------------------------------------------------------------
 # Session-state defaults + risk preview (map itself is built later, after
@@ -515,9 +515,11 @@ if "soil_series" not in st.session_state:
 if "soil_k_factor" not in st.session_state:
     st.session_state.soil_k_factor = None
 if "r_factor" not in st.session_state:
-    st.session_state.r_factor = 175.0
+    st.session_state.r_factor = 150.0
 if "r_factor_note" not in st.session_state:
-    st.session_state.r_factor_note = "R=175 (standard Iowa zone)"
+    st.session_state.r_factor_note = "R=150 (default)"
+if "r_factor_is_fallback" not in st.session_state:
+    st.session_state.r_factor_is_fallback = False
 if "county_name" not in st.session_state:
     st.session_state.county_name = None
 
@@ -736,8 +738,19 @@ risk_result["zone_mukey_tolerance"] = _zone_mukey_tol
 # ---------------------------------------------------------------------------
 _soil_layer = None
 if mupolygons:
+    # Per-unit acres for map-label suppression (slivers below the 0.5-ac floor get
+    # no label). Reproject the WGS84 geometries to the field acre CRS in one batch;
+    # degrade to None (label always shown) if the projection is unavailable.
+    import geopandas as _gpd
+    _mu_geoms = [g for _, g, _ in mupolygons]
+    try:
+        _mu_gs = _gpd.GeoSeries(_mu_geoms, crs="EPSG:4326")
+        _mu_acre_crs = _zone_acre_crs or _mu_gs.estimate_utm_crs()
+        _mu_acres = list(_mu_gs.to_crs(_mu_acre_crs).area / 4046.8564224)
+    except Exception:
+        _mu_acres = [None] * len(mupolygons)
     _soil_layer = []
-    for _mk, _geom, _t in mupolygons:
+    for (_mk, _geom, _t), _ac in zip(mupolygons, _mu_acres):
         _info = _mu_per.get(_mk, {}) or {}
         _soil_layer.append({
             "geometry": _geom,
@@ -745,7 +758,28 @@ if mupolygons:
             "musym":    _info.get("musym"),
             "t":        _t,
             "k":        _info.get("k"),
+            "acres":    _ac,
         })
+
+# Flagged-soil outline layer (NEW, separate from the Soil-T viewer above): only
+# the zone×soil rows that EXCEED tolerance at the two highest severity tiers.
+# "Near tolerable limit" is intentionally excluded from the map — it remains in
+# the table. Each entry carries the WGS84 zone∩mukey intersection geometry so
+# the outline traces the actual overlap, not the soil's or zone's full extent.
+_FLAGGED_SOIL_SEVERITIES = {"Exceeds tolerable limit", "Significantly exceeds limit"}
+_flagged_soil_layer = None
+if mupolygons:
+    _flagged_soil_layer = [
+        {
+            "geometry":      _r.get("geometry"),
+            "musym":         _r.get("musym") or _r.get("mukey"),
+            "severity":      _r.get("severity"),
+            "a_over_t":      _r.get("a_over_t"),
+            "overlap_acres": _r.get("overlap_acres"),
+        }
+        for _r in (_zone_mukey_tol.get("rows_flagged") or [])
+        if _r.get("severity") in _FLAGGED_SOIL_SEVERITIES and _r.get("geometry") is not None
+    ]
 
 folium_map = build_map_with_rasters(
     field_boundary, ndvi_array, slope_percent,
@@ -755,6 +789,7 @@ folium_map = build_map_with_rasters(
     ndvi_threshold=ndvi_threshold,
     risk_zone_array=_risk_zone_preview,
     soil_polygons=_soil_layer,
+    flagged_soil_polygons=_flagged_soil_layer,
 )
 
 progress.progress(100)
@@ -815,17 +850,44 @@ else:
     def _round_half(x):
         return round(x * 2) / 2 if x is not None else np.nan
 
-    if _flagged:
-        _tol_rows = [{
+    # When "show all" is ON, sub-0.5-ac rows display their actual acreage rounded
+    # to 2 decimals (kept numeric for Arrow) rather than a "<0.5" string, so the
+    # Acres column stays numeric and tiny overlaps don't collapse to 0.0/0.5.
+    def _tol_row(r, acres_2dp=False):
+        return {
             "Risk Zone":     r["risk_zone"],
             "Soil (musym)":  r.get("musym") or r["mukey"],
             "T":             r["soil_T"],                                   # numeric
             "A/T":           (f"{r['a_over_t']:.1f}×" if r.get("a_over_t") is not None else ""),
             "Severity":      r.get("severity") or "",
-            "Acres":         _round_half(r["overlap_acres"]),              # numeric
+            "Acres":         (round(r["overlap_acres"], 2) if acres_2dp
+                              else _round_half(r["overlap_acres"])),       # numeric
             "A":             r["a_zone"],                                   # numeric (per-soil A_row)
-        } for r in _flagged]
-        _tol_df = pd.DataFrame(_tol_rows)
+        }
+
+    _show_all = st.checkbox(
+        "Show all zone×soil rows (including within tolerable limit)",
+        value=False,
+        key="soil_tol_show_all",
+    )
+
+    if _show_all:
+        # Full set, sorted by A/T descending (None ratios last). rows_full is
+        # already in this order; sort defensively in case that ever changes.
+        _all_sorted = sorted(
+            _zmt_full,
+            key=lambda r: (r["a_over_t"] if r.get("a_over_t") is not None else -1.0),
+            reverse=True,
+        )
+        _tol_df = pd.DataFrame([_tol_row(r, acres_2dp=True) for r in _all_sorted])
+        st.dataframe(_tol_df, hide_index=True, use_container_width=True)
+        st.caption(
+            f"Showing all {len(_all_sorted)} zone–soil combination(s), sorted by A/T "
+            "descending. Acres shown to 2 decimals; rows under 0.5 ac display their "
+            "actual area."
+        )
+    elif _flagged:
+        _tol_df = pd.DataFrame([_tol_row(r) for r in _flagged])
         st.dataframe(_tol_df, hide_index=True, use_container_width=True)
         if _rolled.get("n_rows"):
             st.caption(
@@ -1242,7 +1304,13 @@ if _sl_result and _sl_result.get("status_code") != "unavailable":
         "critical_t": st.error,
     }.get(_sc, st.info)
     _status_fn(f"**{_sl_result['conservation_status']}**")
-    st.caption(f"Iowa R-factor: {st.session_state.get('r_factor_note', 'R=150 (standard Iowa)')}")
+    _dem_label = st.session_state.get("dem_source_label", "—")
+    _r_note    = st.session_state.get("r_factor_note", "R=150 (default)")
+    if st.session_state.get("r_factor_is_fallback"):
+        st.caption(f"DEM: {_dem_label}")
+        st.warning(f"⚠️ RUSLE R-factor: {_r_note}")
+    else:
+        st.caption(f"DEM: {_dem_label} · R: {_r_note}")
     st.caption(
         "⚠️ Simplified RUSLE estimate for advisory use only. "
         "Not a substitute for a site-specific RUSLE2 run or official NRCS determination."
@@ -1264,7 +1332,8 @@ with col_b:
 with col_c:
     pdf_county = st.text_input(
         "County",
-        value=st.session_state.county_name or "Shelby County, IA",
+        value=st.session_state.county_name or "",
+        placeholder="e.g. Goodhue County, MN",
     )
 
 col_d, col_e, col_f = st.columns(3)
@@ -1280,7 +1349,7 @@ with col_f:
 _pdf_kwargs = dict(
     field_name=pdf_field_name or "Field",
     farm_name=pdf_farm_name   or "",
-    county=pdf_county         or "Iowa",
+    county=pdf_county         or "",
     ndvi_array=ndvi_array,
     slope_array=slope_percent,
     ndvi_stats=ndvi_stats,

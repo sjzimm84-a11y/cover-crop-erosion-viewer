@@ -1,5 +1,6 @@
 from typing import Any, Optional
 import base64
+import json
 from io import BytesIO
 
 import folium
@@ -8,49 +9,80 @@ import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import rasterio
+from branca.element import MacroElement, Template
 from folium import GeoJson
 from PIL import Image
 from rasterio.warp import transform_bounds
 from shapely.geometry import mapping
 
-# Soil-tolerance (T) color ramp — ABSOLUTE scale keyed to actual T-values,
-# consistent across every field. Blue = more tolerant (high T), orange = less
-# tolerant / "attention" (low/fragile T). Colorblind-safe blue↔orange palette.
-# Fields whose units are all T=5 render uniformly blue — that is the correct
-# "no fragile ground" signal; within-field detail lives in the flagged table,
-# not the color. T-value bins (tons/ac/yr):
-#     T <= 3  -> deep orange   (most fragile)
-#     T == 4  -> orange
-#     T == 5  -> blue
-#     T >= 6  -> deep blue      (most tolerant)
-_SOIL_T_DEEP_ORANGE = "#D85A30"   # T <= 3  most fragile (attention)
-_SOIL_T_ORANGE      = "#EF9F27"   # T == 4
-_SOIL_T_BLUE        = "#0C447C"   # T == 5
-_SOIL_T_DEEP_BLUE   = "#06264A"   # T >= 6  most tolerant
-_SOIL_T_NODATA      = "#888888"
+# Minimum polygon size (acres) for an at-a-glance text label. Polygons below
+# this floor still render — we just suppress their label so slivers don't clutter
+# the map. Consistent with the 0.5-ac overlap floor used by the flagged table.
+_LABEL_MIN_ACRES = 0.5
+
+# Neutral SSURGO style — the soil map-unit layer no longer implies erosion risk
+# by color (T-based ramp removed). Uniform grey outline + faint grey fill so the
+# polygons stay hoverable for the tooltip without reading as a risk signal.
+_SOIL_NEUTRAL_FILL    = "#9aa0a6"
+_SOIL_NEUTRAL_OUTLINE = "#5a6068"
 
 
-def _soil_ramp_colors(t_values=None):
-    """Return a ``T -> hex`` color function on the FIXED absolute T scale.
+def _text_label_marker(lat: float, lon: float, text: str) -> folium.Marker:
+    """A small DivIcon text marker centered on (lat, lon).
 
-    The mapping is independent of the field's T distribution (``t_values`` is
-    accepted and ignored for call-site compatibility), so the same T renders the
-    same color in every field. Bins: T<=3 deep orange, T==4 orange, T==5 blue,
-    T>=6 deep blue; missing T renders grey.
+    Used as an at-a-glance identifier over a polygon's representative point. The
+    text is high-contrast white with a dark halo so it reads on any basemap;
+    ``icon_size=(0, 0)`` plus the centering transform anchors the text on the
+    point rather than offsetting it.
     """
-    def color(t: Optional[float]) -> str:
-        if t is None:
-            return _SOIL_T_NODATA
-        t = float(t)
-        if t <= 3.5:
-            return _SOIL_T_DEEP_ORANGE   # T <= 3 (with rounding headroom)
-        if t < 4.5:
-            return _SOIL_T_ORANGE        # T == 4
-        if t < 5.5:
-            return _SOIL_T_BLUE          # T == 5
-        return _SOIL_T_DEEP_BLUE         # T >= 6
+    html = (
+        '<div style="font-family:monospace;font-size:11px;font-weight:600;'
+        'color:#f5f7fa;white-space:nowrap;'
+        'text-shadow:0 0 2px #000,0 0 2px #000,0 0 2px #000;'
+        f'transform:translate(-50%,-50%);">{text}</div>'
+    )
+    return folium.Marker(
+        location=[lat, lon],
+        icon=folium.DivIcon(html=html, icon_size=(0, 0), icon_anchor=(0, 0)),
+    )
 
-    return color
+
+def _add_legend_control(m: folium.Map, inner_html: str) -> None:
+    """Render the legend as a Leaflet control (bottom-left), not a fixed div.
+
+    A ``position:fixed`` body-level div is fragile under streamlit-folium: the
+    component iframe (or an ancestor that establishes a containing block) can
+    clip or hide it regardless of z-index — which is why bumping z-index did not
+    bring it back. A Leaflet control lives inside the map's own
+    ``.leaflet-control-container``, so Leaflet positions and shows it reliably.
+    ``disableClickPropagation`` stops clicks on the legend from zooming the map.
+    """
+    style = (
+        "background:rgba(14,17,23,0.88);padding:12px 16px;border-radius:8px;"
+        "border:1px solid #30363d;font-family:monospace;font-size:12px;"
+        "color:#c9d1d9;line-height:1.45;"
+    )
+    macro = MacroElement()
+    macro._name = "LegendControl"
+    macro.inner_json = json.dumps(inner_html)   # JS string literal, safely escaped
+    macro.style_json = json.dumps(style)
+    macro._template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var {{ this.get_name() }} = L.control({position: 'bottomleft'});
+        {{ this.get_name() }}.onAdd = function (map) {
+            var div = L.DomUtil.create('div');
+            div.innerHTML = {{ this.inner_json }};
+            div.style.cssText = {{ this.style_json }};
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            return div;
+        };
+        {{ this.get_name() }}.addTo({{ this._parent.get_name() }});
+        {% endmacro %}
+        """
+    )
+    macro.add_to(m)
 
 
 def build_map_with_rasters(
@@ -65,6 +97,7 @@ def build_map_with_rasters(
     ndvi_threshold: float = 0.20,
     risk_zone_array: np.ndarray = None,
     soil_polygons: Optional[list] = None,
+    flagged_soil_polygons: Optional[list] = None,
 ) -> folium.Map:
     # Expose threshold to colormap logic below
     ndvi_opacity_threshold = ndvi_threshold
@@ -180,8 +213,8 @@ def build_map_with_rasters(
     # colored by ITS OWN per-mukey T on the blue→orange ramp (low T = orange =
     # attention). Geometries are WGS84 shapely; tooltip shows musym / T / K.
     if soil_polygons:
-        _color_for = _soil_ramp_colors([_sp.get("t") for _sp in soil_polygons])
         _features = []
+        _soil_labels = []   # (lat, lon, text) at each unit's representative point
         for _sp in soil_polygons:
             _geom = _sp.get("geometry")
             if _geom is None or _geom.is_empty:
@@ -196,26 +229,33 @@ def build_map_with_rasters(
                     "musym": _musym,
                     "T": "n/a" if _t is None else round(float(_t), 1),
                     "K": "n/a" if _k is None else round(float(_k), 3),
-                    "_color": _color_for(None if _t is None else float(_t)),
                 },
             })
+            # musym-only label (one polygon per unit on this layer — no ambiguity);
+            # suppress on slivers below the area floor.
+            _ac = _sp.get("acres")
+            if _ac is None or float(_ac) >= _LABEL_MIN_ACRES:
+                _rp = _geom.representative_point()
+                _soil_labels.append((_rp.y, _rp.x, _musym))
         if _features:
+            _soil_group = folium.FeatureGroup(name="SSURGO Soil Map Units", show=False)
             folium.GeoJson(
                 {"type": "FeatureCollection", "features": _features},
-                name="SSURGO Soil Map Units (by T)",
-                show=False,
                 style_function=lambda feat: {
-                    "fillColor": feat["properties"]["_color"],
-                    "color": "#1b1f24",
+                    "fillColor": _SOIL_NEUTRAL_FILL,
+                    "color": _SOIL_NEUTRAL_OUTLINE,
                     "weight": 0.7,
-                    "fillOpacity": 0.55,
+                    "fillOpacity": 0.12,
                 },
                 highlight_function=lambda feat: {"weight": 2, "color": "#f0c040"},
                 tooltip=folium.GeoJsonTooltip(
                     fields=["musym", "T", "K"],
                     aliases=["Map unit:", "T (t/ac/yr):", "K factor:"],
                 ),
-            ).add_to(m)
+            ).add_to(_soil_group)
+            for _lat, _lon, _txt in _soil_labels:
+                _text_label_marker(_lat, _lon, _txt).add_to(_soil_group)
+            _soil_group.add_to(m)
 
     # --- Risk Index Zones layer (optional) ---
     if risk_zone_array is not None:
@@ -240,11 +280,81 @@ def build_map_with_rasters(
             name="Risk Index Zones (C\u00d7LS)", show=False,
         ).add_to(m)
 
-    colorbar_html = """
-    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
-        background:rgba(14,17,23,0.88);padding:12px 16px;
-        border-radius:8px;border:1px solid #30363d;
-        font-family:monospace;font-size:12px;color:#c9d1d9;">
+    # --- Flagged Soil (Exceeds Tolerance) outline layer (optional, OFF) ---
+    # Added AFTER the Risk Index overlay so outlines sit ABOVE the colored zones.
+    # Only the two highest severity tiers arrive here ("Near tolerable limit" is
+    # excluded upstream). Outline-only (no fill). Two-tier styling on the existing
+    # blue\u2192orange palette: "Exceeds tolerable limit" = orange #EF9F27, lighter +
+    # dashed; "Significantly exceeds limit" = #D85A30, darker + thicker + solid so
+    # it reads as more severe. Geometry is the WGS84 zone\u2229mukey intersection \u2014 the
+    # actual overlap, not the soil's or zone's full extent.
+    if flagged_soil_polygons:
+        # Two severity tiers, now FILLED (not outline-only). The fill color +
+        # intensity carries severity: "Significantly exceeds limit" = deeper
+        # orange at higher opacity; "Exceeds tolerable limit" = lighter orange at
+        # lower opacity. A thin dark border keeps each polygon defined.
+        _SEV_STYLE = {
+            "Significantly exceeds limit": {"fill": "#D85A30", "fillop": 0.60},
+            "Exceeds tolerable limit":     {"fill": "#EF9F27", "fillop": 0.38},
+        }
+        _flag_feats = []
+        _flag_labels = []   # (lat, lon, text) at each polygon's representative point
+        for _fp in flagged_soil_polygons:
+            _geom = _fp.get("geometry")
+            if _geom is None or getattr(_geom, "is_empty", True):
+                continue
+            _sev   = _fp.get("severity")
+            _style = _SEV_STYLE.get(_sev, _SEV_STYLE["Exceeds tolerable limit"])
+            _aot   = _fp.get("a_over_t")
+            _ac    = _fp.get("overlap_acres")
+            _musym = _fp.get("musym") or "n/a"
+            _aot_txt = None if _aot is None else f"{float(_aot):.1f}\u00d7"
+            _flag_feats.append({
+                "type": "Feature",
+                "geometry": mapping(_geom),
+                "properties": {
+                    "musym":    _musym,
+                    "severity": _sev or "n/a",
+                    "A/T":      "n/a" if _aot_txt is None else _aot_txt,
+                    "acres":    "n/a" if _ac is None else round(float(_ac), 2),
+                    "_fill":    _style["fill"],
+                    "_fillop":  _style["fillop"],
+                },
+            })
+            # Label "{musym} {A/T}\u00d7" \u2014 the same musym can appear as multiple
+            # polygons (one per risk-zone \u00d7 soil intersection), so appending A/T
+            # disambiguates and matches the table's A/T column. Suppress on slivers.
+            if _ac is None or float(_ac) >= _LABEL_MIN_ACRES:
+                _label = _musym if _aot_txt is None else f"{_musym} {_aot_txt}"
+                _rp = _geom.representative_point()
+                _flag_labels.append((_rp.y, _rp.x, _label))
+        if _flag_feats:
+            _flag_group = folium.FeatureGroup(
+                name="Flagged Soil (Exceeds Tolerance)", show=False,
+            )
+            folium.GeoJson(
+                {"type": "FeatureCollection", "features": _flag_feats},
+                style_function=lambda feat: {
+                    "color":       "#1b1f24",
+                    "weight":      0.8,
+                    "fill":        True,
+                    "fillColor":   feat["properties"]["_fill"],
+                    "fillOpacity": feat["properties"]["_fillop"],
+                },
+                highlight_function=lambda feat: {"weight": 2.5, "color": "#f0c040"},
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["musym", "severity", "A/T", "acres"],
+                    aliases=["Map unit:", "Severity:", "A/T:", "Overlap (ac):"],
+                ),
+            ).add_to(_flag_group)
+            for _lat, _lon, _txt in _flag_labels:
+                _text_label_marker(_lat, _lon, _txt).add_to(_flag_group)
+            _flag_group.add_to(m)
+
+    # Legend content only (no positioning wrapper) — _add_legend_control wraps it
+    # in a Leaflet control so it renders reliably inside the map container under
+    # streamlit-folium, where a position:fixed body div gets clipped/hidden.
+    legend_inner_html = """
         <b style="color:#79c0ff;">NDVI Cover Quality</b><br>
         <span style="color:#F97316;">&#9632;</span> Low Cover<br>
         <span style="color:#38BDF8;">&#9632;</span> Marginal<br>
@@ -261,15 +371,12 @@ def build_map_with_rasters(
         <span style="color:#F97316;">&#9632;</span> High &nbsp;
         <span style="color:#EF4444;">&#9632;</span> Critical
         <hr style="border-color:#30363d;margin:6px 0;">
-        <b style="color:#79c0ff;">Soil Tolerance T (t/ac/yr)</b><br>
-        <span style="color:#D85A30;">&#9632;</span> T&le;3 &nbsp;
-        <span style="color:#EF9F27;">&#9632;</span> T=4 &nbsp;
-        <span style="color:#0C447C;">&#9632;</span> T=5 &nbsp;
-        <span style="color:#06264A;">&#9632;</span> T&ge;6
-    </div>
+        <b style="color:#79c0ff;">Flagged Soil (A vs T)</b><br>
+        <span style="color:#EF9F27;">&#9632;</span> Exceeds (2&ndash;5&times;T) &nbsp;
+        <span style="color:#D85A30;">&#9632;</span> Significantly (&gt;5&times;T)
     """
-    m.get_root().html.add_child(folium.Element(colorbar_html))
     folium.LayerControl().add_to(m)
+    _add_legend_control(m, legend_inner_html)
     m.fit_bounds([sw, ne])
     return m
 

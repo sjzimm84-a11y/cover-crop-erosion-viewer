@@ -1,0 +1,262 @@
+<?xml version="1.0"?>
+<metadata>
+  <idinfo>
+    <citation>
+      <citeinfo>
+        <origin>Department of Commerce (DOC), National Oceanic and Atmospheric Administration (NOAA), National Ocean Service (NOS),Office for Coastal Management (OCM)</origin>
+        <pubdate>20131226</pubdate>
+        <title>R-Factor for the Coterminous United States</title>
+        <geoform>raster digital data</geoform>
+        <pubinfo>
+          <pubplace>Charleston, SC</pubplace>
+          <publish>NOAA's Ocean Service, Office for Coastal Management (OCM)</publish>
+        </pubinfo>
+        <othercit>Renard, K.G., Foster, C.R., Weesies, G.A., McCool, D.K., Yoder, D.C., (1997). Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation (RUSLE). US Department of Agriculture, Agriculture Handbook Number 703, Government Printing Office, Washington, DC, p.47-51.</othercit>
+        <onlink>http://coast.noaa.gov/digitalcoast/tools/opennspect</onlink>
+      </citeinfo>
+    </citation>
+    <descript>
+      <abstract>The rainfall-runoff erosivity factor (R-Factor) quantifies the effects of raindrop impacts and reflects the amount and rate of runoff associated with the rain. The R-factor is one of the parameters used by the Revised Unified Soil Loss Equation (RUSLE) to estimate annual rates of erosion. This product is a raster representation of R-Factor derived from isoerodent maps published in the Agriculture Handbook Number 703 (Renard et al.,1997). Lines connecting points of equal rainfall ersoivity are called isoerodents. The iserodents plotted on a map of the coterminous U.S. were digitized, then values between these lines were obtained by linear interpolation. The final R-Factor data are in raster GeoTiff format at 800 meter resolution in Albers Conic Equal Area, GRS80, NAD83.</abstract>
+      <purpose>These data are represented in raster format for use with the Open source Nonpoint Source Pollution and Erosion Comparison Tool (OpenNSPECT).</purpose>
+      <supplinf>These data are derived from isoerodent maps published in the Agriculture Handbook number 703 (Renard et al., 1997). Renard, K.G., Foster, C.R., Weesies, G.A., McCool, D.K., Yoder, D.C., (1997). Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation (RUSLE). US Department of Agriculture, Agriculture Handbook Number 703, Government Printing Office, Washington, DC, p. 47-51.</supplinf>
+    </descript>
+    <timeperd>
+      <timeinfo>
+        <rngdates>
+          <begdate>1975</begdate>
+          <begtime>Unknown</begtime>
+          <enddate>1997</enddate>
+          <endtime>Unknown</endtime>
+        </rngdates>
+      </timeinfo>
+      <current>ground condition</current>
+    </timeperd>
+    <status>
+      <progress>Complete</progress>
+      <update>None Planned</update>
+    </status>
+    <spdom>
+      <bounding>
+        <westbc>-125.325871714</westbc>
+        <eastbc>-66.4104121711</eastbc>
+        <northbc>48.4453282747</northbc>
+        <southbc>24.5562065906</southbc>
+      </bounding>
+    </spdom>
+    <keywords>
+      <theme>
+        <themekt>ISO 19115 Topic Category</themekt>
+        <themekey>climatologyMeteorologyAtmosphere</themekey>
+      </theme>
+      <theme>
+        <themekt>None</themekt>
+        <themekey>Environmental Monitoring</themekey>
+        <themekey>R-Factor</themekey>
+        <themekey>Rainfall-Runoff Erosivity</themekey>
+        <themekey>Revised Universal Soil Loss Equation</themekey>
+        <themekey>Erosion</themekey>
+        <themekey>RUSLE</themekey>
+        <themekey>RUSLE2</themekey>
+      </theme>
+      <place>
+        <placekt>None</placekt>
+        <placekey>Coterminous United States</placekey>
+      </place>
+    </keywords>
+    <accconst>None</accconst>
+    <useconst>None</useconst>
+    <ptcontac>
+      <cntinfo>
+        <cntorgp>
+          <cntorg>NOAA Office for Coastal Management</cntorg>
+        </cntorgp>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>2234 South Hobson Avenue</address>
+          <city>Charleston</city>
+          <state>SC</state>
+          <postal>29405-2413</postal>
+        </cntaddr>
+        <cntvoice>843-740-1202</cntvoice>
+        <cntemail>coastal.info@noaa.gov</cntemail>
+      </cntinfo>
+    </ptcontac>
+    <datacred>Acknowledgement of the NOAA Office for Coastal Management and Renard et al. (1997) would be appreciated in products derived from these data.</datacred>
+    <native>MapWindow GIS 8.x</native>
+  </idinfo>
+  <dataqual>
+    <attracc>
+      <attraccr>The cell values in this product represent R-Factor which is an erosivity index for rainfall and runoff. The units are (hundreds ft-tonf-in)/(ac-h-yr).</attraccr>
+    </attracc>
+    <logic>Tests for logical consistency indicate that all row and column positions in the selected latitude/longitude window contain data.  Conversion and integration with vector files indicates that all positions are consistent with earth coordinates covering the same area.</logic>
+    <complete>All pixels within the coterminous U.S. boundary contain R-Factor values.</complete>
+    <posacc>
+      <horizpa>
+        <horizpar>This map is an approximation of spatial rainfall-runoff values</horizpar>
+      </horizpa>
+      <vertacc>
+        <vertaccr>None</vertaccr>
+      </vertacc>
+    </posacc>
+    <lineage>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>NOAA, National Ocean Service, Office for Coastal Management</origin>
+            <pubdate>Unknown</pubdate>
+            <pubtime>Unknown</pubtime>
+            <title>R-Factor for the Coterminous United States</title>
+            <geoform>raster digital data</geoform>
+          </citeinfo>
+        </srccite>
+        <srcscale>250000000</srcscale>
+        <typesrc>disc</typesrc>
+        <srctime>
+          <timeinfo>
+            <rngdates>
+              <begdate>1975</begdate>
+              <begtime>Unknown</begtime>
+              <enddate>1997</enddate>
+              <endtime>Unknown</endtime>
+            </rngdates>
+          </timeinfo>
+          <srccurr>Paper map</srccurr>
+        </srctime>
+        <srccitea>R-Factor</srccitea>
+        <srccontr>Derived from isoerodent maps (Renard et al., 1997)</srccontr>
+      </srcinfo>
+      <procstep>
+        <procdesc>The rainfall-funoff erosivity factor was estimated from the R-Factor maps for the coterminous U.S. given in the Agriculture Handbook number 703. A line shapefile approximation of the printed map was generated via "heads-up" digitizing. The final raster map was produced using the Topo to Raster command in ESRI ArcGIS 10.x.</procdesc>
+        <procdate>2013</procdate>
+        <proccont>
+          <cntinfo>
+            <cntorgp>
+              <cntorg>NOAA Office for Coastal Management</cntorg>
+            </cntorgp>
+            <cntaddr>
+              <addrtype>mailing and physical</addrtype>
+              <address>2234 South Hobson Avenue</address>
+              <city>Charleston</city>
+              <state>SC</state>
+              <postal>29405-2413</postal>
+            </cntaddr>
+            <cntvoice>843-740-1202</cntvoice>
+            <cntemail>coastal.info@noaa.gov</cntemail>
+          </cntinfo>
+        </proccont>
+      </procstep>
+    </lineage>
+    <cloud>0</cloud>
+  </dataqual>
+  <spdoinfo>
+    <direct>Raster</direct>
+  </spdoinfo>
+  <spref>
+    <horizsys>
+      <planar>
+        <mapproj>
+          <mapprojn>Albers Conical Equal Area</mapprojn>
+          <albers>
+            <stdparll>29.5</stdparll>
+            <stdparll>45.5</stdparll>
+            <longcm>96</longcm>
+            <latprjo>23</latprjo>
+            <feast>0.00000</feast>
+            <fnorth>0.00000</fnorth>
+          </albers>
+        </mapproj>
+        <planci>
+          <plance>row and column</plance>
+          <coordrep>
+            <absres>800</absres>
+            <ordres>800</ordres>
+          </coordrep>
+          <plandu>meters</plandu>
+        </planci>
+      </planar>
+      <geodetic>
+        <horizdn>North American Datum 1983</horizdn>
+        <ellips>GRS80</ellips>
+        <semiaxis>6378137.0</semiaxis>
+        <denflat>298.257</denflat>
+      </geodetic>
+    </horizsys>
+    <vertdef>
+      <altsys>
+        <altdatum>North American Vertical Datum of 1983</altdatum>
+        <altres>1</altres>
+        <altunits>meters</altunits>
+        <altenc>Attribute values</altenc>
+      </altsys>
+    </vertdef>
+  </spref>
+  <eainfo>
+    <detailed>
+      <enttyp>
+        <enttypl>R-Factor map for the U.S.</enttypl>
+        <enttypd>Coterminous U.S. states</enttypd>
+        <enttypds>unknown</enttypds>
+      </enttyp>
+      <attr>
+        <attrlabl>Rainfall-runoff Factor</attrlabl>
+        <attrdef>R-Factor is an erosivity index value for rainfall and runoff</attrdef>
+        <attrdefs>Renard, K.G., Foster, C.R., Weesies, G.A., McCool, D.K., Yoder, D.C., (1997). Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation (RUSLE). US Department of Agriculture, Agriculture Handbook Number 703, Government Printing Office, Washington, DC, p. 47-51.</attrdefs>
+        <attrdomv>
+          <edom>
+            <edomv>0 Background</edomv>
+            <edomvd>This class contains no data.</edomvd>
+            <edomvds>N/A</edomvds>
+          </edom>
+        </attrdomv>
+        <attrdomv>
+          <edom>
+            <edomv>1 R-Factor</edomv>
+            <edomvd>Erosivity index value for rainfall and runoff.</edomvd>
+            <edomvds>Renard, K.G., Foster, C.R., Weesies, G.A., McCool, D.K., Yoder, D.C., (1997). Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation (RUSLE). US Department of Agriculture, Agriculture Handbook Number 703, Government Printing Office, Washington, DC, p. 47-51.</edomvds>
+          </edom>
+        </attrdomv>
+      </attr>
+    </detailed>
+  </eainfo>
+  <distinfo>
+    <distrib>
+      <cntinfo>
+        <cntorgp>
+          <cntorg>NOAA Office for Coastal Management</cntorg>
+        </cntorgp>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>2234 South Hobson Avenue</address>
+          <city>Charleston</city>
+          <state>SC</state>
+          <postal>29405-2413</postal>
+        </cntaddr>
+        <cntvoice>843-740-1202</cntvoice>
+        <cntemail>coastal.info@noaa.gov</cntemail>
+      </cntinfo>
+    </distrib>
+    <resdesc>Downloadable data</resdesc>
+    <distliab>Any conclusions drawn from the analysis of this information are not the responsibility of NOAA, the Office for Coastal Management or its partners.</distliab>
+  </distinfo>
+  <metainfo>
+    <metd>20150310</metd>
+    <metc>
+      <cntinfo>
+        <cntorgp>
+          <cntorg>NOAA Office for Coastal Management</cntorg>
+        </cntorgp>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>2234 South Hobson Avenue</address>
+          <city>Charleston</city>
+          <state>SC</state>
+          <postal>29405-2413</postal>
+        </cntaddr>
+        <cntvoice>843-740-1202</cntvoice>
+        <cntemail>coastal.info@noaa.gov</cntemail>
+      </cntinfo>
+    </metc>
+    <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+    <metstdv>FGDC-STD-001-1998</metstdv>
+  </metainfo>
+</metadata>

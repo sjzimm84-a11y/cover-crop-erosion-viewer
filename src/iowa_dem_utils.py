@@ -1,7 +1,10 @@
 """
 iowa_dem_utils.py
 -----------------
-Automatic Iowa 3m DEM retrieval via Iowa DNR ArcGIS ImageServer.
+Automatic DEM retrieval. Primary source is the Iowa DNR 3m ArcGIS ImageServer;
+if it is unavailable (it intermittently returns "Could not access any server
+machines"), ``get_dem_with_fallback`` automatically falls back to the nationwide
+USGS 3DEP ImageServer, then to a user-uploaded / sample DEM.
 
 Confirmed endpoint (verified April 2026):
   https://programs.iowadnr.gov/geospatial/rest/services/Elevation/DEM_3M_I/ImageServer
@@ -35,6 +38,15 @@ import geopandas as gpd
 IOWA_DEM_URL = (
     "https://programs.iowadnr.gov/geospatial/rest/services"
     "/Elevation/DEM_3M_I/ImageServer/exportImage"
+)
+
+# Nationwide USGS 3DEP dynamic ImageServer — fallback when the Iowa DNR service
+# is unavailable (it periodically returns "Could not access any server
+# machines"). Returns elevation directly in METERS as float32 (no cm→m
+# conversion, unlike the Iowa DNR UInt16 service).
+USGS_3DEP_URL = (
+    "https://elevation.nationalmap.gov/arcgis/rest/services"
+    "/3DEPElevation/ImageServer/exportImage"
 )
 
 TARGET_RESOLUTION_M = 3
@@ -152,6 +164,105 @@ def fetch_iowa_dem(
     return dem_meters, transform, profile
 
 
+def fetch_usgs_3dep(
+    boundary_gdf: gpd.GeoDataFrame,
+    resolution_m: int = TARGET_RESOLUTION_M,
+    buffer_m: int = BOUNDARY_BUFFER_M,
+    timeout: int = REQUEST_TIMEOUT,
+) -> Tuple[np.ndarray, rasterio.Affine, Dict[str, Any]]:
+    """
+    Fetch a DEM for a field boundary via the USGS 3DEP ImageServer.
+
+    Nationwide fallback for ``fetch_iowa_dem``. Output is in EPSG:26915 to match
+    the Iowa pipeline. Unlike the Iowa DNR service, 3DEP returns float32 elevation
+    already in METERS, so no centimeter conversion is applied.
+
+    Returns
+    -------
+    (dem_array_meters, affine_transform, rasterio_profile)
+    """
+    boundary_utm = boundary_gdf.to_crs("EPSG:26915")
+    bounds = boundary_utm.buffer(buffer_m).total_bounds  # [minx, miny, maxx, maxy]
+
+    width_m  = bounds[2] - bounds[0]
+    height_m = bounds[3] - bounds[1]
+    px_w = max(int(width_m  / resolution_m), 32)
+    px_h = max(int(height_m / resolution_m), 32)
+    # 3DEP exportImage caps a single request at 4100 px per side.
+    px_w = min(px_w, 4100)
+    px_h = min(px_h, 4100)
+
+    params = {
+        "bbox":          f"{bounds[0]},{bounds[1]},{bounds[2]},{bounds[3]}",
+        "bboxSR":        "26915",
+        "size":          f"{px_w},{px_h}",
+        "imageSR":       "26915",
+        "format":        "tiff",
+        "pixelType":     "F32",
+        "interpolation": "RSP_BilinearInterpolation",
+        "f":             "image",
+    }
+
+    try:
+        resp = requests.get(
+            USGS_3DEP_URL,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "CoverMap/1.0"},
+        )
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            f"USGS 3DEP request timed out after {timeout}s. Upload a DEM manually."
+        )
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "Cannot reach USGS 3DEP server. "
+            "Check internet connection or upload DEM manually."
+        )
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"USGS 3DEP server error ({resp.status_code}): {resp.text[:300]}"
+        )
+
+    if len(resp.content) < 100:
+        raise RuntimeError(
+            f"USGS 3DEP returned too-small response ({len(resp.content)} bytes). "
+            f"Content: {resp.text[:200]}"
+        )
+
+    is_tiff = (
+        resp.content[:4] == b'II*\x00' or
+        resp.content[:4] == b'MM\x00*'
+    )
+    if not is_tiff:
+        raise RuntimeError(
+            f"USGS 3DEP returned non-TIFF: {resp.content[:100]}"
+        )
+
+    with MemoryFile(resp.content) as memfile:
+        with memfile.open() as dataset:
+            dem_meters = dataset.read(1).astype(np.float32)
+            transform  = dataset.transform
+            profile    = dataset.profile.copy()
+            src_nodata = dataset.nodata
+
+    # 3DEP nodata is a large negative sentinel; mask it (and any absurd values).
+    if src_nodata is not None:
+        dem_meters[dem_meters == np.float32(src_nodata)] = np.nan
+    dem_meters[dem_meters < -1e4] = np.nan
+
+    profile.update({
+        "dtype":  "float32",
+        "nodata": float("nan"),
+        "crs":    "EPSG:26915",
+        "height": dem_meters.shape[0],
+        "width":  dem_meters.shape[1],
+    })
+
+    return dem_meters, transform, profile
+
+
 def get_dem_with_fallback(
     boundary_gdf: gpd.GeoDataFrame,
     uploaded_dem_path: Optional[str] = None,
@@ -170,9 +281,19 @@ def get_dem_with_fallback(
         valid = dem_array[~np.isnan(dem_array)]
         if valid.size == 0:
             raise RuntimeError("Iowa DEM returned all nodata pixels.")
-        return dem_array, transform, profile, "Iowa 3m WCS (auto)"
+        return dem_array, transform, profile, "Iowa DNR 3m"
     except RuntimeError as wcs_err:
         wcs_error_msg = str(wcs_err)
+
+    # Fall back to USGS 3DEP (nationwide) — covers Iowa DNR outages automatically
+    try:
+        dem_array, transform, profile = fetch_usgs_3dep(boundary_gdf)
+        valid = dem_array[~np.isnan(dem_array)]
+        if valid.size == 0:
+            raise RuntimeError("USGS 3DEP returned all nodata pixels.")
+        return dem_array, transform, profile, "USGS 3DEP (resampled to 3m)"
+    except RuntimeError as usgs_err:
+        usgs_error_msg = str(usgs_err)
 
     # Fall back to uploaded DEM
     if uploaded_dem_path is not None:
@@ -199,6 +320,7 @@ def get_dem_with_fallback(
     raise RuntimeError(
         f"All DEM sources failed.\n"
         f"Iowa DNR: {wcs_error_msg}\n"
+        f"USGS 3DEP: {usgs_error_msg}\n"
         f"Please upload a DEM GeoTIFF manually."
     )
 
