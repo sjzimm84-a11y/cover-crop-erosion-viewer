@@ -781,39 +781,53 @@ if mupolygons:
         if _r.get("severity") in _FLAGGED_SOIL_SEVERITIES and _r.get("geometry") is not None
     ]
 
-folium_map = build_map_with_rasters(
-    field_boundary, ndvi_array, slope_percent,
-    ndvi_transform, ndvi_profile.get("crs"),
-    ndvi_opacity, slope_opacity,
-    zoom_start=st.session_state.map_zoom,
-    ndvi_threshold=ndvi_threshold,
-    risk_zone_array=_risk_zone_preview,
-    soil_polygons=_soil_layer,
-    flagged_soil_polygons=_flagged_soil_layer,
-)
+# Build the folium map. A single bad layer (e.g. a geometry that serializes to
+# JS folium can't render) must never blank the whole map AND take the rest of the
+# page down with it — degrade to folium_map=None and surface a readable warning.
+folium_map = None
+try:
+    folium_map = build_map_with_rasters(
+        field_boundary, ndvi_array, slope_percent,
+        ndvi_transform, ndvi_profile.get("crs"),
+        ndvi_opacity, slope_opacity,
+        zoom_start=st.session_state.map_zoom,
+        ndvi_threshold=ndvi_threshold,
+        risk_zone_array=_risk_zone_preview,
+        soil_polygons=_soil_layer,
+        flagged_soil_polygons=_flagged_soil_layer,
+    )
+except Exception as _map_exc:  # noqa: BLE001 - never let map build crash the page
+    _log.exception("build_map_with_rasters failed (%s: %s)",
+                   type(_map_exc).__name__, _map_exc)
 
 progress.progress(100)
 status.empty()
 progress.empty()
 
 st.subheader("🗺️ Field Risk Map")
-try:
-    from streamlit_folium import st_folium
-    map_data = st_folium(
-        folium_map,
-        height=520,
-        width='stretch',
-        returned_objects=["last_zoom", "last_center"],
-        key="field_map",
+if folium_map is None:
+    st.warning(
+        "Field Risk Map could not be rendered for this field. The rest of the "
+        "analysis below is unaffected. (Details logged to the server console.)"
     )
-    # Save zoom and center so next rerun starts at same position
-    if map_data and map_data.get("last_zoom"):
-        st.session_state.map_zoom = map_data["last_zoom"]
-    if map_data and map_data.get("last_center"):
-        st.session_state.map_center = map_data["last_center"]
-except ImportError:
-    # Fallback if streamlit-folium not installed
-    st.components.v1.html(folium_map._repr_html_(), height=520)
+else:
+    try:
+        from streamlit_folium import st_folium
+        map_data = st_folium(
+            folium_map,
+            height=520,
+            width='stretch',
+            returned_objects=["last_zoom", "last_center"],
+            key="field_map",
+        )
+        # Save zoom and center so next rerun starts at same position
+        if map_data and map_data.get("last_zoom"):
+            st.session_state.map_zoom = map_data["last_zoom"]
+        if map_data and map_data.get("last_center"):
+            st.session_state.map_center = map_data["last_center"]
+    except ImportError:
+        # Fallback if streamlit-folium not installed
+        st.components.v1.html(folium_map._repr_html_(), height=520)
 
 # Map legend — native Streamlit block beneath the map. streamlit-folium strips
 # the in-map Leaflet control, so THIS is the legend users actually see; the

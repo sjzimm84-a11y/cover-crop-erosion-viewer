@@ -341,7 +341,12 @@ def build_map_with_rasters(
                 "properties": {
                     "musym":    _musym,
                     "severity": _sev or "n/a",
-                    "A/T":      "n/a" if _aot_txt is None else _aot_txt,
+                    # Property KEY must be a valid JS identifier: folium may pick
+                    # it as the style-switch feature identifier and emits
+                    # `switch(feature.properties.<key>)`. A "/" parses as division
+                    # ("A/T" -> A ÷ T -> "T is not defined"), aborting the whole
+                    # map render. Display label stays "A/T:" via the alias below.
+                    "A_T":      "n/a" if _aot_txt is None else _aot_txt,
                     "acres":    "n/a" if _ac is None else round(float(_ac), 2),
                     "_fill":    _style["fill"],
                     "_fillop":  _style["fillop"],
@@ -369,7 +374,7 @@ def build_map_with_rasters(
                 },
                 highlight_function=lambda feat: {"weight": 2.5, "color": "#f0c040"},
                 tooltip=folium.GeoJsonTooltip(
-                    fields=["musym", "severity", "A/T", "acres"],
+                    fields=["musym", "severity", "A_T", "acres"],
                     aliases=["Map unit:", "Severity:", "A/T:", "Overlap (ac):"],
                 ),
             ).add_to(_flag_group)
