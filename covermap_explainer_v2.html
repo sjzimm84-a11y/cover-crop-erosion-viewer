@@ -459,7 +459,7 @@ footer {
     <span class="badge">Sentinel-2 · 10 m</span>
     <span class="badge">Google Earth Engine</span>
     <span class="badge">RUSLE C × LS</span>
-    <span class="badge">Iowa NRCS FOTG</span>
+    <span class="badge">USDA NRCS RUSLE</span>
   </div>
 </div>
 
@@ -471,7 +471,7 @@ footer {
   <p class="sec-lead">Answers the question every cover crop producer eventually asks: <em>what did this actually do for my ground?</em></p>
 
   <ul style="padding-left:1.3em; line-height:2.1; margin-bottom:1.4em; font-size:1.02rem">
-    <li>Maps erosion Risk Index zones at pixel resolution using satellite NDVI and Iowa 3m slope data</li>
+    <li>Maps erosion Risk Index zones at pixel resolution using satellite NDVI and 3 m LiDAR slope data</li>
     <li>Estimates C-factor reduction and soil saved (t/ac/yr) versus a no-cover baseline — by landscape position</li>
     <li>Generates a field report in under two minutes — Producer summary, CCA advisory report, or GIS shapefile export</li>
     <li>Works on any Iowa field with a boundary — no proprietary data, no site visit required</li>
@@ -521,7 +521,7 @@ footer {
     <div class="pipe-step">
       <div class="pipe-icon">⛰</div>
       <strong>LS-Factor</strong>
-      Iowa 3 m DEM<br>McCool et al. 1987
+      3 m LiDAR DEM<br>McCool et al. 1987
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
@@ -796,7 +796,7 @@ Higher values = higher erosion potential from the combination of poor cover and 
   <div class="two-col" style="margin-top:1em">
     <div class="card green-top">
       <h3>Erosion Risk Index Map</h3>
-      <p>The primary output. Each pixel is colored by its C × LS Risk Index value — the combination of cover density (from NDVI) and slope steepness (from the Iowa 3 m DEM). Red and orange pixels identify where cover crop stand is insufficient relative to the terrain's erosion amplification. This is the map that answers: <em>"Where is this field most vulnerable right now?"</em></p>
+      <p>The primary output. Each pixel is colored by its C × LS Risk Index value — the combination of cover density (from NDVI) and slope steepness (from the 3 m LiDAR DEM). Red and orange pixels identify where cover crop stand is insufficient relative to the terrain's erosion amplification. This is the map that answers: <em>"Where is this field most vulnerable right now?"</em></p>
     </div>
     <div class="card green-top">
       <h3>NDVI and Slope Maps</h3>
@@ -868,25 +868,34 @@ Higher values = higher erosion potential from the combination of poor cover and 
   <div class="formula-block">
 <span class="hl">A = R × K × LS × C × P</span>
 
-R  =  175.0  MJ·mm/ha·hr·yr  <span class="comment">Shelby County · Iowa NRCS FOTG Figure 2 (September 2002)</span>
-K  =    0.32  t·ha·hr/ha·MJ·mm  <span class="comment">Monona silt loam · SSURGO (SDM Data Access API)</span>
+R  =  146    (US customary units)  <span class="comment">Shelby County · USDA AH703 erosivity · NOAA Midwest R-factor raster (Renard et al. 1997)</span>
+K  =    0.32  (US customary units)  <span class="comment">Monona silt loam · SSURGO (SDM Data Access API)</span>
 LS =    3.29  (dimensionless)   <span class="comment">mean field LS · Iowa DNR 3m DEM · McCool et al. 1987</span>
 C  =   0.185  (dimensionless)   <span class="comment">cover crop C · piecewise exponential model (this report)</span>
 P  =    1.0                      <span class="comment">no support practice factor applied</span>
 
-<span class="hl">A_current  = 175 × 0.32 × 3.29 × 0.185 × 1.0  ≈  34.1 t/ac/yr</span>
-<span class="hl">A_baseline = 175 × 0.32 × 3.29 × 0.250 × 1.0  ≈  46.1 t/ac/yr</span>
+<span class="hl">A_current  = 146 × 0.32 × 3.29 × 0.185 × 1.0  ≈  28.4 t/ac/yr</span>
+<span class="hl">A_baseline = 146 × 0.32 × 3.29 × 0.250 × 1.0  ≈  38.4 t/ac/yr</span>
 
 <span class="comment">C_baseline = intercept for conservation tillage (&gt;30% residue) = 0.250</span>
-<span class="comment">Soil saved = A_baseline − A_current = 10.8 t/ac/yr  (23.4% reduction)</span>
-<span class="comment">T-value (Monona) = 5 t/ac/yr  —  field is 9.2× above T without cover · 6.8× with cover</span>
+<span class="comment">Soil saved = A_baseline − A_current = 10.0 t/ac/yr  (≈26% in this single-value calc)</span>
+<span class="comment">T-value (Monona) = 5 t/ac/yr  —  field is 7.7× above T without cover · 5.7× with cover</span>
+
+<span class="comment">── Reconciling with the report ───────────────────────────</span>
+<span class="comment">This block multiplies FIELD-MEAN inputs once: R × K × mean(LS) × mean(C).</span>
+<span class="comment">The report’s headline baseline of 42.5 t/ac/yr is instead computed PER-PIXEL</span>
+<span class="comment">and then area-weighted — mean(R × K × LS × C). It runs ~4 t/ac/yr higher</span>
+<span class="comment">because steep (high-LS) pixels coincide with low-cover (high-C) pixels, so</span>
+<span class="comment">the product of the means understates the mean of the products. Same field,</span>
+<span class="comment">two valid views: this one teaches the formula; the report’s is the field</span>
+<span class="comment">estimate the advisory is built on.</span>
   </div>
 
   <div class="two-col">
     <div>
       <h3>Interpreting the Numbers</h3>
-      <p>The 46.1 t/ac/yr baseline reflects what this conservation tillage field would lose without a living cover crop — Shelby County R = 175, Monona K = 0.32, 12% mean slope, and a conservation tillage intercept of 0.250. That baseline is 9.2× the Monona T-value of 5 t/ac/yr. The cover crop reduces that to an estimated 34.1 t/ac/yr — still 6.8× T. On Monona backslopes under conservation tillage, cover crops are a meaningful tool but not a complete solution.</p>
-      <p>This is the agronomically honest output CoverMap produces: the cover crop is working — 23.4% reduction, 10.8 t/ac/yr saved — but the Risk Index map tells the CCA exactly which 38% of the field is still generating High or Critical erosion risk despite it. That spatial answer is what drives a productive conversation about tillage system, drainage, or structural practices on the critical slope positions.</p>
+      <p>Worked with field-mean inputs, the no-cover baseline comes to ≈38.4 t/ac/yr — Shelby County R = 146, Monona K = 0.32, 12% mean slope, and a conservation tillage intercept of 0.250 — about 7.7× the Monona T-value of 5 t/ac/yr. The cover crop reduces that to ≈28.4 t/ac/yr, still 5.7× T. The report’s area-weighted baseline (42.5 t/ac/yr) is a few tons higher because it integrates per-pixel rather than multiplying means (see the reconciliation in the formula block above). Either way the message holds: on Monona backslopes under conservation tillage, cover crops are a meaningful tool but not a complete solution.</p>
+      <p>This is the agronomically honest output CoverMap produces: the cover crop is working — 23.4% reduction, 10.0 t/ac/yr saved — but the Risk Index map tells the CCA exactly which 38% of the field is still generating High or Critical erosion risk despite it. That spatial answer is what drives a productive conversation about tillage system, drainage, or structural practices on the critical slope positions.</p>
     </div>
     <div>
       <h3>How CoverMap Compares to RUSLE2</h3>
@@ -916,12 +925,13 @@ P  =    1.0                      <span class="comment">no support practice facto
     <li>McCool, D.K., Brown, L.C., Foster, G.R., Mutchler, C.K., &amp; Meyer, L.D. (1987). Revised slope steepness factor for the Universal Soil Loss Equation. <em>Transactions of the ASAE</em>, 30(5), 1387–1396. <em>Source of S-factor piecewise formula used in LS computation.</em></li>
     <li>Renard, K.G., Foster, G.R., Weesies, G.A., McCool, D.K., &amp; Yoder, D.C. (1997). <em>Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation.</em> USDA Agriculture Handbook 703.</li>
     <li>Huddell, A.M., et al. (2024). National synthesis of cereal rye cover crop biomass and performance. <em>Nature Sustainability</em>. n = 5,695 field observations, mean 3,428 kg/ha. <em>Basis for NDVI–biomass estimates.</em></li>
-    <li>Iowa NRCS. (2002). <em>FOTG Section I — USLE Erosion Prediction, Figure 2: Rainfall Factors</em>. Updated electronically September 2002. <em>Source for Iowa R-factor two-zone lookup (R = 150 NW Iowa; R = 175 remainder).</em></li>
+    <li>NOAA Office for Coastal Management. <em>R-Factor for the Conterminous United States</em> (gridded rainfall erosivity, AH703 methodology of Renard et al. 1997). NOAA Digital Coast. <em>Source for the per-field R-factor, sampled from the bundled Midwest clip of this raster.</em></li>
     <li>USDA NRCS. (2023). <em>Conservation Practice Standard 340 — Cover Crop</em>. Iowa Supplement. <em>Stand documentation and minimum biomass requirements referenced throughout.</em></li>
     <li>ISU Extension. (2021). <em>PM-1209 — Cover Crop Management in Iowa</em>. Iowa State University Extension and Outreach. <em>Iowa cover crop species and management guide.</em></li>
     <li>European Space Agency. (2022). <em>Sentinel-2 Level-2A Product Definition</em>. ESA-EOPG-CSCOP-TN-0002. <em>Spectral band definitions, atmospheric correction, SCL cloud masking.</em></li>
     <li>Dittmer, W. (2026, in progress). <em>CoverMap C-Factor Calibration Against RUSLE2 Iowa State File — Monona Silt Loam, Shelby County</em>. USDA NRCS Shelby County Field Office. <em>Planned validation of exponential model parameters.</em></li>
     <li>USDA NRCS. (2024). <em>Web Soil Survey — SSURGO Database</em>. Soil Data Access API (SDMDataAccess.nrcs.usda.gov). <em>Source for K-factor (kwfact) and soil series identification.</em></li>
+    <li>USGS. (2023). <em>3D Elevation Program (3DEP) — Seamless Elevation</em>, ImageServer. <em>Nationwide DEM fallback (resampled to 3 m) when the Iowa DNR 3 m LiDAR DEM is unavailable.</em></li>
   </ol>
 </div>
 </section>
@@ -930,7 +940,7 @@ P  =    1.0                      <span class="comment">no support practice facto
 <footer>
   <strong style="color:rgba(255,255,255,.75)">CoverMap</strong> &nbsp;·&nbsp;
   Stephen Zimmerman, CCA MS &nbsp;·&nbsp; Ag Research Scientist &nbsp;·&nbsp; Ankeny, Iowa<br>
-  Sentinel-2 imagery via Google Earth Engine &nbsp;·&nbsp; Iowa RUSLE C-factor methodology &nbsp;·&nbsp; Iowa DNR 3m DEM<br><br>
+  Sentinel-2 imagery via Google Earth Engine &nbsp;·&nbsp; Iowa RUSLE C-factor methodology &nbsp;·&nbsp; 3 m LiDAR DEM (Iowa DNR / USGS 3DEP)<br><br>
   Advisory only — does not constitute an official NRCS determination. Pre-calibration model parameters subject to revision.
 </footer>
 
