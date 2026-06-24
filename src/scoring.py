@@ -33,7 +33,10 @@ Limitation — LS-factor:
 
 from typing import Dict, Any, Optional
 from pathlib import Path
+import logging
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Default thresholds (kept for backward compatibility with sidebar sliders)
@@ -211,41 +214,62 @@ def _sample_r_factor(lat: float, lon: float) -> Optional[float]:
 def _fcc_county_state(lat: float, lon: float) -> Optional[str]:
     """Return ``"<County> County, <ST>"`` from the FCC Census Block API.
 
-    Returns None if the lookup fails or is incomplete, so the report's county
-    field is left blank for the user to populate rather than guessing a state.
+    Retries a few times with a short backoff and sends a descriptive
+    User-Agent (default ``Python-urllib`` is the first thing CDNs throttle).
+    Returns None — and logs why — if the lookup fails or is incomplete, so the
+    report's county field is left blank for the user to populate rather than
+    guessing a state. Pure/network-only: caching lives at the call site.
     """
     import urllib.request
     import json as _json
+    import time as _time
 
-    try:
-        url = (
-            f"https://geo.fcc.gov/api/census/block/find"
-            f"?latitude={lat:.6f}&longitude={lon:.6f}&format=json"
-        )
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            data = _json.loads(resp.read())
-        county_raw = ((data.get("County") or {}).get("name") or "")
-        state_code = ((data.get("State") or {}).get("code") or "")
-        county = (county_raw.lower().replace(" county", "").strip())
-        if county and state_code:
-            return f"{county.title()} County, {state_code.upper()}"
-        if county:
-            return f"{county.title()} County"
-        return None
-    except Exception:
-        return None
+    url = (
+        f"https://geo.fcc.gov/api/census/block/find"
+        f"?latitude={lat:.6f}&longitude={lon:.6f}&format=json"
+    )
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "CoverMap/2.0 (erosion advisory)",
+        "Accept": "application/json",
+    })
+
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = _json.loads(resp.read())
+            county_raw = ((data.get("County") or {}).get("name") or "")
+            state_code = ((data.get("State") or {}).get("code") or "")
+            county = (county_raw.lower().replace(" county", "").strip())
+            if county and state_code:
+                return f"{county.title()} County, {state_code.upper()}"
+            if county:
+                return f"{county.title()} County"
+            _log.warning("FCC county lookup returned no county for (%.4f, %.4f): status=%s",
+                         lat, lon, data.get("status"))
+            return None
+        except Exception as exc:  # transient network / parse — retry then give up
+            last_err = exc
+            if attempt < 2:
+                _time.sleep(0.5 * (attempt + 1))
+
+    _log.warning("FCC county lookup failed for (%.4f, %.4f) after 3 attempts: %s",
+                 lat, lon, last_err)
+    return None
 
 
 def get_r_factor(boundary_gdf) -> tuple:
     """
     Determine the RUSLE R-factor for a field by sampling the bundled national
-    R-factor raster at the field centroid, and look up the county/state label
-    via the FCC Census Block API (for report display only).
+    R-factor raster at the field centroid.
 
-    Returns ``(r_factor: float, source_note: str, location_display: str | None)``.
-    R-factor units are US customary (hundreds ft-tonf-in / ac-h-yr), matching the
-    A = R·K·LS·C soil-loss math. ``location_display`` is ``"<County> County, <ST>"``
-    or **None** when the FCC lookup is unavailable (left blank for the user).
+    Returns ``(r_factor: float, source_note: str, lat: float | None,
+    lon: float | None)``. R-factor units are US customary (hundreds
+    ft-tonf-in / ac-h-yr), matching the A = R·K·LS·C soil-loss math. The
+    centroid lat/lon is returned so the caller can run a **cached** county
+    lookup via :func:`_fcc_county_state` without recomputing the centroid (and
+    without an uncached network call on every Streamlit rerun). ``lat``/``lon``
+    are ``None`` when the centroid could not be located.
     """
     # Field centroid in lon/lat — projected centroid avoids the geographic-CRS
     # centroid warning (sub-metre shift is irrelevant for R sampling / lookup).
@@ -258,7 +282,7 @@ def get_r_factor(boundary_gdf) -> tuple:
         return (
             R_FACTOR_FALLBACK,
             f"R={R_FACTOR_FALLBACK:.0f} (default — could not locate field centroid)",
-            None,
+            None, None,
         )
 
     # R-factor from the bundled raster (primary source).
@@ -277,9 +301,7 @@ def get_r_factor(boundary_gdf) -> tuple:
             "coverage; verify manually)"
         )
 
-    # County/state label for the report (display only; blank on failure).
-    location_display = _fcc_county_state(lat, lon)
-    return (r_factor, r_note, location_display)
+    return (r_factor, r_note, lat, lon)
 
 
 # Backward-compatible alias (legacy import name).

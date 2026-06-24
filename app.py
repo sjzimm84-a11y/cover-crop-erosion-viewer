@@ -29,6 +29,7 @@ from src.scoring import (
     classify_risk_zones,
     compute_ndvi_zone_summary,
     RESIDUE_OPTIONS,
+    _fcc_county_state,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart, LEGEND_ROWS_HTML
 from src.report_generator import generate_field_report, generate_producer_report
@@ -36,6 +37,14 @@ from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
 _log = logging.getLogger(__name__)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _county_cached(lat_r: float, lon_r: float) -> Optional[str]:
+    """County/state label (FCC), cached per rounded centroid so it fires once
+    per field and survives reruns — a transient failure doesn't keep re-rolling
+    the lookup on every widget interaction."""
+    return _fcc_county_state(lat_r, lon_r)
 
 # GEE NDVI imports — graceful fallback if not configured
 SENTINEL_AVAILABLE = False
@@ -476,10 +485,14 @@ except Exception:
 # ---------------------------------------------------------------------------
 try:
     from src.scoring import get_r_factor
-    _r_factor, _r_factor_note, _county_display = get_r_factor(field_boundary)
+    _r_factor, _r_factor_note, _lat, _lon = get_r_factor(field_boundary)
     st.session_state.r_factor      = _r_factor
     st.session_state.r_factor_note = _r_factor_note
     st.session_state.r_factor_is_fallback = "default" in _r_factor_note.lower()
+    # Cached county lookup — once per field, survives reruns (see _county_cached).
+    _county_display = (
+        _county_cached(round(_lat, 4), round(_lon, 4)) if _lat is not None else None
+    )
     if _county_display:
         st.session_state.county_name = _county_display
 except Exception:
