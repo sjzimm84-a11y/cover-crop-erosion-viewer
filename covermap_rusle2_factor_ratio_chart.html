@@ -1,0 +1,132 @@
+
+<style>
+.chart-label { font-size: 12px; color: var(--color-text-secondary); }
+.annot { font-size: 11px; }
+.legend-sq { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+</style>
+
+<h2 class="sr-only">Bar chart comparing CoverMap to RUSLE2 factor ratios across three validation runs. K factor is neutral at 1.0. LS factor shows a systematic offset of 1.6 to 1.7 times. C factor ranges from 1.0 to 2.8 times. A (soil loss) ranges from 2.6 to 3.9 times.</h2>
+
+<p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 4px 52px;">CoverMap ÷ RUSLE2 factor ratio — Shelby County validation runs (Spring 2026)</p>
+
+<div style="display: flex; gap: 16px; margin: 0 0 12px 52px; flex-wrap: wrap;">
+  <span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--color-text-secondary);"><span class="legend-sq" style="background:#0C447C;"></span>Run 1 — 100D2, 12%</span>
+  <span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--color-text-secondary);"><span class="legend-sq" style="background:#378ADD;"></span>Run 2 — 1D3, 12%</span>
+  <span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--color-text-secondary);"><span class="legend-sq" style="background:#D85A30;"></span>Run 3 — 100F2, 22.3%</span>
+</div>
+
+<div style="position: relative; width: 100%; height: 340px;">
+  <canvas id="ratioChart" role="img" aria-label="Grouped bar chart of CoverMap to RUSLE2 ratios by factor. K: all runs = 1.0. LS: runs 1 and 2 = 1.72, run 3 = 1.64. C: run 1 = 1.63, run 2 = 1.72, run 3 = 2.78. A: run 1 = 2.63, run 2 = 2.61, run 3 = 3.86.">K, LS, C, and A factor ratios across three RUSLE2 validation runs.</canvas>
+</div>
+
+<div style="display:flex; gap:24px; margin: 12px 0 0 52px; flex-wrap: wrap;">
+  <div style="font-size:11px; color:var(--color-text-secondary); display:flex; align-items:center; gap:5px;">
+    <span style="display:inline-block;width:28px;height:2px;background:#888;border-top:2px dashed #888;"></span>
+    1.0 reference — perfect agreement
+  </div>
+  <div style="font-size:11px; color:var(--color-text-secondary);">K = neutral &nbsp;|&nbsp; LS = systematic offset &nbsp;|&nbsp; C = situational &nbsp;|&nbsp; A = compounded</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)';
+const textColor = isDark ? '#aaa' : '#555';
+
+const run1Color  = '#0C447C';
+const run2Color  = '#378ADD';
+const run3Color  = '#D85A30';
+
+new Chart(document.getElementById('ratioChart'), {
+  type: 'bar',
+  data: {
+    labels: ['K factor\n(erodibility)', 'LS factor\n(slope-length)', 'C factor\n(cover)', 'A\n(soil loss)'],
+    datasets: [
+      {
+        label: 'Run 1 — 100D2, 12%',
+        data: [1.00, 1.72, 1.63, 2.63],
+        backgroundColor: run1Color,
+        borderColor: run1Color,
+        borderWidth: 0,
+        borderRadius: 3,
+      },
+      {
+        label: 'Run 2 — 1D3, 12%',
+        data: [1.00, 1.72, 1.72, 2.61],
+        backgroundColor: run2Color,
+        borderColor: run2Color,
+        borderWidth: 0,
+        borderRadius: 3,
+      },
+      {
+        label: 'Run 3 — 100F2, 22.3%',
+        data: [1.00, 1.64, 2.78, 3.86],
+        backgroundColor: run3Color,
+        borderColor: run3Color,
+        borderWidth: 0,
+        borderRadius: 3,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}×`
+        }
+      },
+      annotation: {}
+    },
+    scales: {
+      x: {
+        grid: { color: gridColor },
+        ticks: {
+          color: textColor,
+          font: { size: 12 },
+          maxRotation: 0
+        }
+      },
+      y: {
+        min: 0,
+        max: 4.5,
+        grid: { color: gridColor },
+        ticks: {
+          color: textColor,
+          font: { size: 12 },
+          callback: v => v.toFixed(1) + '×'
+        },
+        title: {
+          display: true,
+          text: 'CoverMap ÷ RUSLE2 ratio',
+          color: textColor,
+          font: { size: 12 }
+        }
+      }
+    }
+  },
+  plugins: [{
+    id: 'refLine',
+    afterDraw(chart) {
+      const { ctx, chartArea: { left, right }, scales: { y } } = chart;
+      const yPos = y.getPixelForValue(1.0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(left, yPos);
+      ctx.lineTo(right, yPos);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.font = '11px sans-serif';
+      ctx.fillStyle = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.35)';
+      ctx.fillText('1.0 — perfect agreement', right - 160, yPos - 5);
+      ctx.restore();
+    }
+  }]
+});
+</script>
