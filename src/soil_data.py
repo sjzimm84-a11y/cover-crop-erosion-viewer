@@ -535,6 +535,7 @@ def zone_mukey_tolerance_rows(
     a_by_zone: Optional[dict] = None,
     *,
     zone_labels: Optional[dict] = None,
+    slope_by_zone: Optional[dict] = None,
     overlap_floor_acres: float = 0.5,
     acre_crs: Optional[str] = None,
     k_by_mukey: Optional[dict] = None,
@@ -578,6 +579,9 @@ def zone_mukey_tolerance_rows(
         a_by_zone: ``{zone_val OR zone_label: A_current}`` zone RUSLE soil loss
             (computed with the field area-weighted K).
         zone_labels: ``{zone_val: label}``; defaults to Low/Moderate/High/Critical.
+        slope_by_zone: ``{zone_val OR zone_label: mean_slope_pct}`` per-zone mean
+            slope %, surfaced verbatim as the row's ``mean_slope_pct`` (a zone
+            property, not re-derived per soil). ``None``/absent → ``None`` column.
         overlap_floor_acres: rows below this POOLED overlap acreage are rolled
             into the summary rather than surfaced as flagged.
         acre_crs: projected CRS for acreage; auto-derived UTM when ``None``.
@@ -593,8 +597,11 @@ def zone_mukey_tolerance_rows(
         (worst first). ``rows_flagged`` are rows where ``within_t_zone is False
         AND overlap_acres >= overlap_floor_acres``; every other row feeds
         ``rolled_summary``. Each row: ``risk_zone, zone_val, mukey, musym,
-        soil_T, a_zone, a_over_t, severity, within_t_zone, overlap_acres,
-        geometry`` — where ``a_zone`` is the per-soil A_row and ``geometry`` is
+        soil_T, K_mukey, mean_slope_pct, a_zone, a_over_t, severity,
+        within_t_zone, overlap_acres, geometry`` — where ``K_mukey`` is the map
+        unit's own erodibility (the rescale numerator, now surfaced),
+        ``mean_slope_pct`` is the overlapping zone's mean slope %, ``a_zone`` is
+        the per-soil A_row and ``geometry`` is
         the WGS84 zone∩mukey intersection (shapely; ``None`` if unavailable),
         provided for map rendering only — it never enters the table or math.
     """
@@ -603,6 +610,7 @@ def zone_mukey_tolerance_rows(
 
     labels = zone_labels or {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
     a_by_zone      = a_by_zone or {}
+    slope_by_zone  = slope_by_zone or {}
     k_by_mukey     = k_by_mukey or {}
     musym_by_mukey = musym_by_mukey or {}
     _rescale_ok    = k_field is not None and k_field > 0
@@ -655,6 +663,7 @@ def zone_mukey_tolerance_rows(
             continue
         label  = labels.get(zone_val)
         a_zone = a_by_zone.get(zone_val, a_by_zone.get(label))
+        slope_zone = slope_by_zone.get(zone_val, slope_by_zone.get(label))
 
         for mk, mgeom, t_val in repaired_mu:
             try:
@@ -689,6 +698,8 @@ def zone_mukey_tolerance_rows(
                     "mukey":         mk,
                     "musym":         musym_by_mukey.get(mk),
                     "soil_T":        t_val,
+                    "K_mukey":       round(float(k_mukey), 4) if k_mukey is not None else None,
+                    "mean_slope_pct": round(float(slope_zone), 1) if slope_zone is not None else None,
                     "a_zone":        round(a_row, 2) if a_row is not None else None,
                     "a_over_t":      round(ratio, 2) if ratio is not None else None,
                     "severity":      _severity(ratio),

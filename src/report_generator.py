@@ -65,6 +65,22 @@ CONCERN_BADGE_COLOR = {
     "Critical": colors.HexColor("#6e1c1c"),
 }
 
+# Disclaimer placed beneath every absolute soil-loss (A, t/ac/yr) value in BOTH
+# report tiers. Wording is fixed — see Technical Guide §7.7 (RUSLE2 validation).
+A_VALUE_DISCLAIMER = (
+    "Soil loss estimates reflect CoverMap's field advisory model. Values may run "
+    "2–4× above RUSLE2 on backslope positions due to a fixed slope-length exponent "
+    "(m=0.5, §7.7). Use for relative risk ranking and % erosion reduction, not "
+    "quantitative determination."
+)
+
+# One-line validation provenance for the CCA report footer only.
+CCA_VALIDATION_PROVENANCE = (
+    "K-factor validated against RUSLE2 v2.7.1 (Shelby County Monona, K=0.37/0.49). "
+    "LS and C divergence documented in Tech Guide §7.7. % erosion reduction is the "
+    "most defensible comparative metric."
+)
+
 
 # ---------------------------------------------------------------------------
 # Map image generator
@@ -888,6 +904,11 @@ def generate_field_report(
             "Absolute soil loss differs by zone due to LS variation. ±10 pt uncertainty on reduction percentage.</i>",
             small_style,
         ))
+        story.append(Paragraph(
+            f"<i>{A_VALUE_DISCLAIMER}</i>",
+            ParagraphStyle("AValueDisclaimer", parent=small_style,
+                           textColor=colors.HexColor("#92400e")),
+        ))
         story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
@@ -967,6 +988,11 @@ def generate_field_report(
             "substitute for a site-specific RUSLE2 run or official NRCS determination.</i>",
             small_style,
         ))
+        story.append(Paragraph(
+            f"<i>{A_VALUE_DISCLAIMER}</i>",
+            ParagraphStyle("AValueDisclaimer", parent=small_style,
+                           textColor=colors.HexColor("#92400e")),
+        ))
         story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
@@ -1038,6 +1064,11 @@ def generate_field_report(
             ParagraphStyle("SoilLossContext", parent=small_style,
                            textColor=colors.HexColor("#92400e")),
         ))
+        story.append(Paragraph(
+            f"<i>{A_VALUE_DISCLAIMER}</i>",
+            ParagraphStyle("AValueDisclaimer", parent=small_style,
+                           textColor=colors.HexColor("#92400e")),
+        ))
     else:
         story.append(Paragraph(
             "Soil loss estimate unavailable \u2014 K-factor not returned from USDA "
@@ -1107,6 +1138,7 @@ def generate_field_report(
         "context is baked into per-system intercept, floor, and k parameters. "
         "Calibration against RUSLE2 Iowa State File runs in progress (Shelby County NRCS, W. Dittmer, 2026). "
         "Parameters subject to revision. This report is advisory only and does not constitute an official NRCS determination.",
+        CCA_VALIDATION_PROVENANCE,
         f"CoverMap CCA Report \u00b7 {cca_name} \u00b7 Sentinel-2 via Google Earth Engine \u00b7 Iowa RUSLE C-factor calibration \u00b7 {report_date}",
     ]
     for line in footer_lines:
@@ -1668,12 +1700,28 @@ def generate_producer_report(
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                 ("TOPPADDING",    (0, 0), (-1, -1), 4),
                 ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+                # Headline the % erosion reduction (row 1) as the primary metric…
+                ("BACKGROUND",    (0, 1), (-1, 1),  colors.HexColor("#dcfce7")),
+                ("FONTSIZE",      (1, 1), (1, 1),   14),
+                ("FONTNAME",      (1, 1), (1, 1),   "Helvetica-Bold"),
+                ("TEXTCOLOR",     (1, 1), (1, 1),   GREEN_BADGE),
+                ("TOPPADDING",    (0, 1), (-1, 1),  6),
+                ("BOTTOMPADDING", (0, 1), (-1, 1),  6),
+                # …and demote the raw A (t/ac/yr) rows to secondary (smaller, gray).
+                ("FONTSIZE",      (0, 2), (-1, 3),  7),
+                ("TEXTCOLOR",     (0, 2), (-1, 3),  colors.HexColor("#57606a")),
+                ("FONTNAME",      (0, 2), (0, 3),   "Helvetica"),
             ]))
             story.append(cc_red_table_p)
             story.append(Paragraph(
                 "<i>Estimates based on RUSLE C-factor methodology. C-factor derived from piecewise "
                 "exponential NDVI model. ±10 pt uncertainty on reduction percentage.</i>",
                 small_style,
+            ))
+            story.append(Paragraph(
+                f"<i>{A_VALUE_DISCLAIMER}</i>",
+                ParagraphStyle("AValueDisclaimer", parent=small_style,
+                               textColor=colors.HexColor("#92400e")),
             ))
             story.append(Spacer(1, 8))
 

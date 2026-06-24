@@ -709,6 +709,9 @@ if zone_geometries is not None and mupolygons is not None:
         _a_by_zone = {
             z["zone_label"]: z.get("a_current_zone") for z in _zone_erosion_summary
         }
+        _slope_by_zone = {
+            z["zone_label"]: z.get("mean_slope_pct") for z in _zone_erosion_summary
+        }
         # K_field = the field area-weighted K that a_current_zone was computed
         # with (effective_k in scoring): SDA k_factor when available, else WSS K.
         if soil_summary is not None:
@@ -721,6 +724,7 @@ if zone_geometries is not None and mupolygons is not None:
             zone_geometries=zone_geometries,
             mupolygons=mupolygons,
             a_by_zone=_a_by_zone,
+            slope_by_zone=_slope_by_zone,
             acre_crs=_zone_acre_crs,
             k_by_mukey=_k_by_mukey,
             musym_by_mukey=_musym_by_mukey,
@@ -886,6 +890,8 @@ else:
         return {
             "Risk Zone":     r["risk_zone"],
             "Soil (musym)":  r.get("musym") or r["mukey"],
+            "Slope %":       r.get("mean_slope_pct"),                       # numeric
+            "K":             r.get("K_mukey"),                             # numeric
             "T":             r["soil_T"],                                   # numeric
             "A/T":           (f"{r['a_over_t']:.1f}×" if r.get("a_over_t") is not None else ""),
             "Severity":      r.get("severity") or "",
