@@ -32,7 +32,11 @@ from src.scoring import (
     _fcc_county_state,
 )
 from src.visualization import build_map_with_rasters, build_zone_risk_chart, LEGEND_ROWS_HTML
-from src.report_generator import generate_field_report, generate_producer_report
+from src.report_generator import (
+    generate_field_report,
+    generate_producer_report,
+    generate_45z_verification_report,
+)
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
@@ -1424,7 +1428,7 @@ _pdf_kwargs = dict(
     acres_per_pixel=_acres_per_pixel,
 )
 
-col_cca, col_prod = st.columns(2)
+col_cca, col_prod, col_45z = st.columns(3)
 
 with col_cca:
     st.caption("Full documentation with EQIP checklist and CCA signature block.")
@@ -1452,6 +1456,38 @@ with col_prod:
                     label="⬇️ Download Producer Report PDF",
                     data=pdf_bytes,
                     file_name=f"CoverMap_Field_{(pdf_field_name or 'Field').replace(' ','_')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as pdf_exc:
+                st.error(f"PDF generation failed: {pdf_exc}")
+
+with col_45z:
+    st.caption(
+        "Verifier-facing 45Z package (§ 2100.052(c)) with fillable producer "
+        "§ 2100.052(b) records."
+    )
+    if st.button("✅ 45Z Verification Report", use_container_width=True):
+        with st.spinner("Generating 45Z verification package..."):
+            try:
+                # Producer § 2100.052(b) fields are fillable in the PDF itself
+                # (decision: not Streamlit inputs) — pass an empty dict here.
+                pdf_bytes = generate_45z_verification_report(
+                    **_pdf_kwargs,
+                    producer_inputs={},
+                    scene_count=st.session_state.ndvi_scene_count,
+                    ndvi_scene_from=st.session_state.ndvi_scene_earliest,
+                    ndvi_scene_to=st.session_state.ndvi_scene_latest,
+                    valid_pixel_fraction=_valid_pct,
+                )
+                _rid = (
+                    f"{(pdf_farm_name or 'Farm').replace(' ','_')}-"
+                    f"{(pdf_field_name or 'Field').replace(' ','_')}"
+                )
+                st.download_button(
+                    label="⬇️ Download 45Z Verification PDF",
+                    data=pdf_bytes,
+                    file_name=f"CoverMap_45Z_{_rid}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                 )

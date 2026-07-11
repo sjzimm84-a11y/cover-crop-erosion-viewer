@@ -31,7 +31,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image as RLImage, HRFlowable, PageBreak,
+    Image as RLImage, HRFlowable, PageBreak, Flowable,
 )
 from reportlab.pdfgen import canvas as rl_canvas
 
@@ -1740,6 +1740,758 @@ def generate_producer_report(
         "continuous C-factor differentiated by residue system. "
         "This report is advisory only and does not constitute an official NRCS determination.",
         f"CoverMap Field Report · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
+    ]
+    for line in footer_lines:
+        story.append(Paragraph(line, small_style))
+
+    # Build PDF
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+# ===========================================================================
+# 45Z COVER CROP VERIFICATION PACKAGE
+# ---------------------------------------------------------------------------
+# Third report type (alongside the CCA and producer reports above, which are
+# FROZEN — this section does not touch them). Verifier-facing audit workpaper
+# implementing docs/45z_package_layout_v1.md against 7 CFR § 2100.052(c).
+#
+# Layout (3 physical pages; the wireframe's "Page 4" is the repeating footer):
+#   Page 1 — § 2100.052(c) establishment evidence (callout + evidence table +
+#            NDVI zone map + zone summary + seeding-gap disclosure)
+#   Page 2 — Supplemental CCA field advisory, walled off from (c) evidence
+#            (risk-index map + risk zone summary + field metrics + slope map)
+#   Page 3 — § 2100.052(b) producer records as fillable PDF (AcroForm) fields,
+#            producer attestation + signature line, regulatory-basis footer
+#
+# Rendering only — no scoring logic. Reuses the shared map/acreage helpers and
+# color constants above. Producer § 2100.052(b) fields are AcroForm widgets so
+# a producer can type or print-and-hand-write them; empty producer_inputs -> a
+# blank fillable form, populated producer_inputs -> pre-filled values.
+# ===========================================================================
+
+# Producer records rendered on Page 3, sourced from the 45Z crosswalk Section 5
+# gap list. Method options match the wireframe's Page 3 checkbox groups.
+_45Z_SEEDING_METHODS     = ["Drilled", "Broadcast", "Aerial", "Interseeded"]
+_45Z_TERMINATION_METHODS = ["Winter kill", "Herbicide", "Roller crimper", "Mowing"]
+
+
+class _ProducerRecordsForm(Flowable):
+    """Raw-canvas Page 3 fillable § 2100.052(b) producer-records block.
+
+    Draws real PDF AcroForm widgets (text fields + checkboxes) via the live
+    canvas so the fields are typeable in any PDF viewer and print cleanly for
+    hand entry. ``producer_inputs`` pre-fills values; an empty/omitted dict
+    yields a blank form. Field names are unique within the document.
+    """
+
+    _ROW_H = 0.62 * inch   # vertical space per record row
+
+    def __init__(self, width, producer_inputs=None):
+        super().__init__()
+        self.width  = width
+        self.pi     = producer_inputs or {}
+        # 7 record rows + a little breathing room top/bottom.
+        self.height = self._ROW_H * 7 + 0.15 * inch
+
+    # -- small drawing helpers (operate in the flowable's local coord space) --
+    def _checkbox(self, name, x, y, checked, label):
+        # relative=True -> coords honor the Platypus flowable's canvas transform
+        # (acroForm widgets are otherwise placed in absolute page coordinates).
+        size = 10
+        self.canv.acroForm.checkbox(
+            name=name, x=x, y=y - size + 2, size=size, relative=True,
+            checked=bool(checked), buttonStyle="check",
+            borderWidth=0.75, borderColor=MID_GRAY, fillColor=colors.white,
+            textColor=TEXT_DARK, forceBorder=True,
+        )
+        self.canv.setFont("Helvetica", 8)
+        self.canv.setFillColor(TEXT_DARK)
+        self.canv.drawString(x + size + 3, y - size + 4, label)
+        return x + size + 5 + self.canv.stringWidth(label, "Helvetica", 8) + 12
+
+    def _textfield(self, name, x, y, w, value, h=13):
+        self.canv.acroForm.textfield(
+            name=name, x=x, y=y - h + 1, width=w, height=h, relative=True,
+            value=value or "", fontSize=8, fontName="Helvetica",
+            borderWidth=0.75, borderColor=MID_GRAY,
+            fillColor=colors.HexColor("#fbfcfd"), textColor=TEXT_DARK,
+            borderStyle="underlined", forceBorder=True,
+        )
+
+    def _cite(self, cite, label, y):
+        self.canv.setFont("Helvetica-Bold", 8)
+        self.canv.setFillColor(colors.HexColor("#57606a"))
+        self.canv.drawString(0, y - 9, cite)
+        self.canv.setFont("Helvetica", 8.5)
+        self.canv.setFillColor(TEXT_DARK)
+        self.canv.drawString(0.62 * inch, y - 9, label)
+
+    def draw(self):
+        c  = self.canv
+        pi = self.pi
+        top = self.height
+        row = self._ROW_H
+        entry_x = 3.55 * inch   # left edge of the producer-entry column
+
+        # Faint top rule.
+        c.setStrokeColor(MID_GRAY)
+        c.setLineWidth(0.4)
+        c.line(0, top, self.width, top)
+
+        y = top - 0.14 * inch
+
+        # (b)(1) — seed purchase/receipt on file
+        self._cite("(b)(1)", "Seed purchase / receipt on file", y)
+        _rx = self._checkbox("b1_receipt_yes", entry_x, y,
+                             pi.get("seed_receipt_on_file") == "Yes", "Yes")
+        _rx = self._checkbox("b1_receipt_no", _rx, y,
+                             pi.get("seed_receipt_on_file") == "No", "No")
+        c.setFont("Helvetica", 8)
+        c.setFillColor(TEXT_DARK)
+        c.drawString(_rx, y - 9, "retention date:")
+        self._textfield("b1_retention_date",
+                        _rx + c.stringWidth("retention date:", "Helvetica", 8) + 4,
+                        y, 0.95 * inch, pi.get("seed_retention_date"))
+        y -= row
+
+        # (b)(3) — seeding date
+        self._cite("(b)(3)", "Cover crop seeding date", y)
+        self._textfield("b3_seeding_date", entry_x, y, 1.6 * inch,
+                        pi.get("seeding_date"))
+        y -= row
+
+        # (b)(3) — seeding method
+        self._cite("(b)(3)", "Seeding method", y)
+        _mx = entry_x
+        _sel_method = pi.get("seeding_method")
+        for _m in _45Z_SEEDING_METHODS:
+            _mx = self._checkbox(f"b3_method_{_m.lower()}", _mx, y,
+                                 _sel_method == _m, _m)
+        y -= row
+
+        # (b)(3) — seeding rate
+        self._cite("(b)(3)", "Seeding rate (lb/ac)", y)
+        self._textfield("b3_seeding_rate", entry_x, y, 1.2 * inch,
+                        pi.get("seeding_rate"))
+        y -= row
+
+        # (b)(6) — termination date
+        self._cite("(b)(6)", "Cover crop termination date", y)
+        self._textfield("b6_termination_date", entry_x, y, 1.6 * inch,
+                        pi.get("termination_date"))
+        y -= row
+
+        # (b)(6) — termination method
+        self._cite("(b)(6)", "Termination method", y)
+        _tx = entry_x
+        _sel_term = pi.get("termination_method")
+        for _t in _45Z_TERMINATION_METHODS:
+            _tx = self._checkbox(f"b6_term_{_t.split()[0].lower()}", _tx, y,
+                                 _sel_term == _t, _t)
+        y -= row
+
+        # (b)(8) — grazing prior to termination
+        self._cite("(b)(8)", "Grazing occurred prior to termination", y)
+        _gx = self._checkbox("b8_grazing_no", entry_x, y,
+                             pi.get("grazing_occurred") == "No", "No")
+        _gx = self._checkbox("b8_grazing_yes", _gx, y,
+                             pi.get("grazing_occurred") == "Yes",
+                             "Yes — georeferenced photos attached")
+        y -= row
+
+        # Row separators.
+        c.setStrokeColor(colors.HexColor("#e5e9ee"))
+        c.setLineWidth(0.3)
+        for _i in range(1, 7):
+            _yy = top - 0.14 * inch - row * _i + row - 0.02 * inch
+            c.line(0, _yy, self.width, _yy)
+
+
+def generate_45z_verification_report(
+    # Field info
+    field_name: str,
+    farm_name: str,
+    county: str,
+    # Data
+    ndvi_array: np.ndarray,
+    slope_array: np.ndarray,
+    ndvi_stats: Dict[str, float],
+    slope_stats: Dict[str, float],
+    risk_result: Dict[str, Any],
+    zone_summary: Any,
+    risk_zone_array: Optional[np.ndarray] = None,
+    zone_counts: Optional[Dict[str, int]] = None,
+    # Settings
+    ndvi_threshold: float = 0.20,
+    slope_threshold: float = 6.0,
+    # Dates
+    ndvi_date_from: Optional[str] = None,
+    ndvi_date_to: Optional[str] = None,
+    ndvi_scene_date: Optional[str] = None,
+    report_date: Optional[str] = None,
+    dem_source: str = "Iowa 3-meter Digital Elevation Model (Iowa DNR)",
+    # CCA info
+    cca_name: str = "Stephen Zimmerman, CCA MS",
+    cca_contact: str = "Ankeny, IA | Ag Research Scientist",
+    # Optional field detail
+    termination_date: Optional[str] = None,
+    previous_crop: Optional[str] = None,
+    soil_series: Optional[str] = None,
+    soil_k_factor: Optional[str] = None,
+    residue_system: Optional[str] = None,
+    soil_loss_result: Optional[Dict[str, Any]] = None,
+    r_factor: float = 150.0,
+    r_factor_note: Optional[str] = None,
+    acres_per_pixel: float = (10.0 ** 2) / 4046.86,
+    # ---- 45Z-specific ----
+    producer_inputs: Optional[Dict[str, Any]] = None,
+    management_unit_id: Optional[str] = None,
+    boundary_source: Optional[str] = None,
+    scene_count: Optional[int] = None,
+    ndvi_scene_from: Optional[str] = None,
+    ndvi_scene_to: Optional[str] = None,
+    valid_pixel_fraction: Optional[float] = None,
+    report_id: Optional[str] = None,
+) -> bytes:
+    """Generate the 45Z Cover Crop Verification Package PDF (verifier-facing).
+
+    Three physical pages per docs/45z_package_layout_v1.md. Rendering only —
+    reuses the same data structures the CCA/producer reports consume, plus
+    45Z-specific fields. ``producer_inputs`` (see _ProducerRecordsForm) pre-
+    fills the Page 3 § 2100.052(b) fillable form; an empty/omitted dict yields
+    a blank form. Returns PDF bytes ready for st.download_button.
+    """
+    if report_date is None:
+        report_date = datetime.now().strftime("%B %d, %Y")
+
+    # Report ID: [FarmName]-[FieldName], no timestamp (locked decision #3).
+    if report_id is None:
+        _fn = (farm_name or "").strip() or "Farm"
+        _fd = (field_name or "").strip() or "Field"
+        report_id = f"{_fn}-{_fd}"
+
+    # Valid pixel fraction: prefer the app-supplied value; else compute inline
+    # with the same definition the pipeline/UI use (NDVI > 0.05 over the
+    # boundary-masked field). Rendering-only — no gate is enforced here.
+    _nonnan = ndvi_array[~np.isnan(ndvi_array)]
+    if valid_pixel_fraction is None:
+        _denom = _nonnan.size
+        valid_pixel_fraction = (
+            float(np.sum(_nonnan > 0.05)) / _denom * 100.0 if _denom > 0 else 0.0
+        )
+    _vpf_qc_pass = valid_pixel_fraction >= 75.0
+
+    # Establishment determination — reuse the existing "cover crop confirmed"
+    # gate (field NDVI mean vs. threshold). No new scoring logic.
+    _ndvi_mean = ndvi_stats.get("mean", 0.0)
+    _established = _ndvi_mean >= ndvi_threshold
+
+    # Establishment pixel fraction (>= 0.20) — the defensible headline metric,
+    # computed the same way the existing reports compute pct_above_020.
+    _pct_ge_thresh = (
+        float(np.sum(_nonnan >= ndvi_threshold)) / _nonnan.size * 100.0
+        if _nonnan.size > 0 else 0.0
+    )
+    _zone_acres_45  = calculate_zone_acres(ndvi_array, ndvi_threshold,
+                                           acres_per_pixel=acres_per_pixel)
+    _total_acres_45 = _zone_acres_45.get("Total", 0.0)
+    _est_acres      = _pct_ge_thresh / 100.0 * _total_acres_45
+
+    # Scene metadata for the evidence table.
+    if scene_count is None:
+        scene_count = risk_result.get("scene_count")
+    _scene_range = (
+        f"{ndvi_scene_from} – {ndvi_scene_to}"
+        if ndvi_scene_from and ndvi_scene_to
+        else (ndvi_scene_date or ndvi_scene_to or "—")
+    )
+    _window_range = (
+        f"{ndvi_date_from} – {ndvi_date_to}"
+        if ndvi_date_from and ndvi_date_to else (ndvi_date_to or "—")
+    )
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        rightMargin=0.5 * inch,
+        leftMargin=0.5 * inch,
+        topMargin=0.4 * inch,
+        bottomMargin=0.4 * inch,
+        title=f"45Z Verification Package — {report_id}",
+    )
+
+    styles = getSampleStyleSheet()
+    story  = []
+
+    # --- Styles ---
+    title_style = ParagraphStyle(
+        "ReportTitle", parent=styles["Normal"], fontSize=17,
+        textColor=TEXT_DARK, fontName="Helvetica-Bold", spaceAfter=2,
+    )
+    subtitle_style = ParagraphStyle(
+        "Subtitle", parent=styles["Normal"], fontSize=10,
+        textColor=colors.HexColor("#57606a"), fontName="Helvetica",
+    )
+    section_style = ParagraphStyle(
+        "Section", parent=styles["Normal"], fontSize=11, textColor=TEXT_DARK,
+        fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=4,
+    )
+    body_style = ParagraphStyle(
+        "Body", parent=styles["Normal"], fontSize=9, textColor=TEXT_DARK,
+        fontName="Helvetica", leading=13,
+    )
+    small_style = ParagraphStyle(
+        "Small", parent=styles["Normal"], fontSize=7.5,
+        textColor=colors.HexColor("#57606a"), fontName="Helvetica", leading=11,
+    )
+    wall_style = ParagraphStyle(
+        "Wall", parent=small_style, fontSize=8.5,
+        textColor=colors.HexColor("#57606a"), fontName="Helvetica-Oblique",
+        leading=12,
+    )
+
+    # -----------------------------------------------------------------------
+    # PAGE 1 — HEADER (verifier audience)
+    # -----------------------------------------------------------------------
+    header_data = [[
+        Paragraph("<b>CoverMap</b>", title_style),
+        Paragraph(
+            f"<b>{cca_name}</b><br/>{cca_contact}",
+            ParagraphStyle("Right", parent=body_style, alignment=TA_RIGHT),
+        ),
+    ]]
+    header_table = Table(header_data, colWidths=[4 * inch, 3 * inch])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(header_table)
+    story.append(HRFlowable(width="100%", thickness=2,
+                            color=BLUE_ACCENT, spaceAfter=2))
+    story.append(Paragraph(
+        "45Z Cover Crop Verification Package", subtitle_style))
+    story.append(Paragraph(
+        f"Report Date: {report_date} &nbsp;·&nbsp; Report ID: {report_id}",
+        small_style,
+    ))
+    story.append(Spacer(1, 4))
+
+    # Field info block
+    field_info = [
+        [
+            Paragraph(f"<b>Field:</b> {field_name}", body_style),
+            Paragraph(f"<b>Farm Producer:</b> {farm_name or '—'}", body_style),
+            Paragraph(f"<b>County:</b> {county or '—'}", body_style),
+        ],
+        [
+            Paragraph(
+                f"<b>Field / management unit identifier:</b> "
+                f"{management_unit_id or '— [producer-supplied, § 2100.031(e)(3)(i)]'}",
+                body_style,
+            ),
+            Paragraph(f"<b>Field acreage:</b> {_total_acres_45:.1f} ac", body_style),
+            Paragraph(
+                f"<b>Boundary source:</b> {boundary_source or '—'}",
+                body_style,
+            ),
+        ],
+    ]
+    field_table = Table(field_info, colWidths=[2.9 * inch, 2.1 * inch, 2.0 * inch])
+    field_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("BOX",           (0, 0), (-1, -1), 0.5, MID_GRAY),
+        ("LINEBELOW",     (0, 0), (-1, 0),  0.3, MID_GRAY),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(field_table)
+    story.append(Spacer(1, 8))
+
+    # -----------------------------------------------------------------------
+    # PAGE 1 — VERIFICATION STATEMENT (headline callout box)
+    # -----------------------------------------------------------------------
+    _determination = "ESTABLISHMENT CONFIRMED" if _established else \
+                     "ESTABLISHMENT: INSUFFICIENT EVIDENCE"
+    _det_color = GREEN_BADGE if _established else RED_BADGE
+    _callout_title = ParagraphStyle(
+        "CalloutTitle", parent=body_style, fontSize=10.5,
+        fontName="Helvetica-Bold", textColor=TEXT_DARK,
+    )
+    _callout_det = ParagraphStyle(
+        "CalloutDet", parent=body_style, fontSize=12,
+        fontName="Helvetica-Bold", textColor=_det_color,
+    )
+    _callout_body = ParagraphStyle(
+        "CalloutBody", parent=body_style, fontSize=9, leading=13,
+    )
+    _vpf_line = (
+        f"{valid_pixel_fraction:.0f}%" if valid_pixel_fraction is not None else "—"
+    )
+    callout_rows = [
+        [Paragraph("§ 2100.052(c) COVER CROP ESTABLISHMENT VERIFICATION",
+                   _callout_title)],
+        [Paragraph(
+            "Method used: <b>Remote sensing data</b> "
+            "(on-site visit and georeferenced photographs not used)",
+            _callout_body)],
+        [Paragraph(f"Determination: {_determination}", _callout_det)],
+        [Paragraph(
+            f"Basis: Sentinel-2 NDVI median composite, "
+            f"{scene_count if scene_count else '—'} scenes, {_scene_range}",
+            _callout_body)],
+        [Paragraph(
+            f"Field NDVI mean: <b>{_ndvi_mean:.3f}</b> &nbsp;·&nbsp; "
+            f"Pixels ≥ {ndvi_threshold:.2f} threshold: "
+            f"<b>{_pct_ge_thresh:.0f}%</b> ({_est_acres:.1f} of {_total_acres_45:.1f} ac)",
+            _callout_body)],
+        [Paragraph(
+            f"Valid pixel fraction: <b>{_vpf_line}</b> "
+            f"({'QC pass' if _vpf_qc_pass else 'below 75% — QC caution'}; "
+            f"≥ 75% required for report generation)",
+            _callout_body)],
+    ]
+    callout = Table(callout_rows, colWidths=[7 * inch])
+    callout.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#f0f6ff")),
+        ("BOX",           (0, 0), (-1, -1), 1.2, BLUE_ACCENT),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+        ("TOPPADDING",    (0, 0), (0, 0),   8),
+        ("TOPPADDING",    (0, 1), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -2), 2),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+        ("LINEBELOW",     (0, 0), (-1, 0),  0.4, colors.HexColor("#c5d9f5")),
+    ]))
+    story.append(callout)
+    story.append(Paragraph(
+        "<i>Binary determination. Numbers state the case. Not an NRCS "
+        "determination — verifier-facing evidence under § 2100.052(c).</i>",
+        small_style,
+    ))
+    story.append(Spacer(1, 8))
+
+    # -----------------------------------------------------------------------
+    # PAGE 1 — § 2100.052(c) ESTABLISHMENT EVIDENCE table
+    # -----------------------------------------------------------------------
+    story.append(Paragraph("§ 2100.052(c) Establishment Evidence", section_style))
+
+    _c_adj  = risk_result.get("c_factor", 0)
+    evidence_rows = [
+        ["Element", "Value", "Source"],
+        ["Compositing method", "Pixel-wise temporal median", "Tech Guide §2.1"],
+        ["Compositing window", _window_range, "User-defined spring window"],
+        ["Scenes composited", str(scene_count) if scene_count else "—", "GEE metadata"],
+        ["Scene date range", _scene_range, "GEE metadata"],
+        ["Cloud filter — scene", "<80% cloud cover", "Two-stage filter"],
+        ["Cloud filter — pixel",
+         "SCL 3, 8, 9, 10, 11 excluded; scenes >30% cloud/shadow excluded",
+         "Two-stage filter"],
+        ["Valid pixel definition",
+         "NDVI > 0.05 (excludes water, cloud shadow, saturated bare soil)",
+         "Tech Guide QC"],
+        ["Valid pixel fraction",
+         f"{_vpf_line} — {'QC pass' if _vpf_qc_pass else 'QC caution'} "
+         f"(≥ 75% required)",
+         "Pipeline gate"],
+        ["NDVI mean", f"{_ndvi_mean:.3f}", "Field-mean, boundary-masked"],
+        ["NDVI range",
+         f"{ndvi_stats.get('min', 0):.3f} – {ndvi_stats.get('max', 0):.3f}",
+         "Pixel min/max"],
+        [f"Pixels ≥ {ndvi_threshold:.2f} (establishment threshold)",
+         f"{_pct_ge_thresh:.0f}%", "Zone summary"],
+        ["Data platform", "Sentinel-2 L2A via Google Earth Engine", "Provenance"],
+    ]
+    _evi_cell = ParagraphStyle("EviCell", parent=body_style, fontSize=7.5,
+                               leading=9)
+    _evi_hdr  = ParagraphStyle("EviHdr", parent=_evi_cell,
+                               fontName="Helvetica-Bold", textColor=colors.white)
+    evidence_table = Table(
+        [[Paragraph(str(c), _evi_hdr if _ri == 0 else _evi_cell) for c in row]
+         for _ri, row in enumerate(evidence_rows)],
+        colWidths=[2.0 * inch, 3.1 * inch, 1.9 * inch],
+    )
+    evidence_table.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 7.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+        ("GRID",           (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 1.5),
+        ("TOPPADDING",     (0, 0), (-1, -1), 1.5),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+        ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(evidence_table)
+    story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
+    # PAGE 1 — NDVI COVER QUALITY zone map + zone summary
+    # -----------------------------------------------------------------------
+    story.append(Paragraph("NDVI Cover Quality", section_style))
+    _rows_a, _cols_a = ndvi_array.shape
+    _aspect_a = _cols_a / max(_rows_a, 1)
+    _marginal_upper = ndvi_threshold + 0.15
+    _ndvi_map_w = 3.1 * inch
+    _ndvi_map_h = min(_ndvi_map_w / _aspect_a, 2.1 * inch)
+    ndvi_png = generate_zone_map_image(ndvi_array, ndvi_threshold,
+                                       array_shape=ndvi_array.shape)
+    ndvi_map_img = RLImage(io.BytesIO(ndvi_png),
+                           width=_ndvi_map_w, height=_ndvi_map_h)
+
+    _zt_total = _zone_acres_45.get("Total", 1) or 1
+    _zt_cell = ParagraphStyle("ZtCell", parent=body_style, fontSize=7.5,
+                              leading=9)
+    ndvi_zone_rows = [["Zone", "Acres", "% Fld"]]
+    _zbg = []
+    for _i, (_zk, _lbl, _bg) in enumerate([
+        ("Good cover", f"Good Cover (>{_marginal_upper:.2f})",
+         colors.HexColor("#FEF9C3")),
+        ("Marginal",   f"Marginal ({ndvi_threshold:.2f}–{_marginal_upper:.2f})",
+         colors.HexColor("#E0F2FE")),
+        ("Low cover",  f"Low Cover (<{ndvi_threshold:.2f})",
+         colors.HexColor("#FEE8D5")),
+    ], start=1):
+        _ac  = _zone_acres_45.get(_zk, 0)
+        _pct = _ac / _zt_total * 100 if _zt_total > 0 else 0
+        ndvi_zone_rows.append([_lbl, f"{_ac:.1f}", f"{_pct:.0f}%"])
+        _zbg.append(("BACKGROUND", (0, _i), (-1, _i), _bg))
+    ndvi_zone_rows.append(["Total", f"{_zt_total:.1f}", "100%"])
+    ndvi_zone_table = Table(
+        [[Paragraph(str(c), _zt_cell) for c in row] for row in ndvi_zone_rows],
+        colWidths=[1.9 * inch, 0.7 * inch, 0.7 * inch])
+    ndvi_zone_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("BACKGROUND",    (0, 4), (-1, 4),  LIGHT_GRAY),
+        ("FONTNAME",      (0, 4), (-1, 4),  "Helvetica-Bold"),
+        ("ALIGN",         (1, 0), (2, -1),  "CENTER"),
+        ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ] + _zbg))
+    # Map (left) and zone summary (right) side by side to conserve height.
+    ndvi_combo = Table([[ndvi_map_img, ndvi_zone_table]],
+                       colWidths=[_ndvi_map_w + 0.2 * inch, 3.6 * inch])
+    ndvi_combo.setStyle(TableStyle([
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",        (0, 0), (0, 0),   "CENTER"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(ndvi_combo)
+    story.append(Spacer(1, 4))
+
+    # Seeding-gap disclosure (locked wording from the wireframe).
+    _low_ac  = _zone_acres_45.get("Low cover", 0.0)
+    story.append(Paragraph(
+        f"<b>Note on the {(_low_ac / _zt_total * 100 if _zt_total else 0):.0f}% "
+        f"low-cover fraction.</b> Verifier will see this; it is not hidden. "
+        f"Low-cover pixels reflect an actual seeding gap (e.g., aerial applicator "
+        f"coverage limitation), not a data artifact or masking issue. The "
+        f"establishment threshold ({_pct_ge_thresh:.0f}% of field pixels ≥ "
+        f"{ndvi_threshold:.2f} NDVI) supports § 2100.052(c) confirmation on "
+        f"the {_est_acres:.1f} seeded acres. Producer may need to exclude the "
+        f"{_low_ac:.1f} low-cover acres from claimed CI credit acreage in the "
+        f"Biofuel Feedstock Report per § 2100.031(e).",
+        small_style,
+    ))
+    story.append(PageBreak())
+
+    # -----------------------------------------------------------------------
+    # PAGE 2 — SUPPLEMENTAL FIELD ADVISORY (walled off from (c) evidence)
+    # -----------------------------------------------------------------------
+    story.append(Paragraph("Supplemental Field Advisory", section_style))
+    story.append(Paragraph(
+        "The following section is CCA field advisory. It is <b>not</b> part of "
+        "the § 2100.052(c) verification evidence on Page 1. RUSLE-derived "
+        "erosion values are for relative ranking and % reduction only. See Tech "
+        "Guide §7.7.",
+        wall_style,
+    ))
+    story.append(HRFlowable(width="100%", thickness=1.0,
+                            color=colors.HexColor("#c5d9f5"), spaceBefore=4,
+                            spaceAfter=6))
+
+    # Risk Index + Terrain Slope maps, side by side (both retained per wireframe).
+    _map_lbl = ParagraphStyle("MapLabel2", parent=body_style,
+                              alignment=TA_CENTER, fontSize=8,
+                              fontName="Helvetica-Bold")
+    _adv_map_w = 3.35 * inch
+    _adv_map_h = min(_adv_map_w / _aspect_a, 2.4 * inch)
+    slope_png = generate_slope_map_image(slope_array, array_shape=slope_array.shape)
+    slope_img = RLImage(io.BytesIO(slope_png), width=_adv_map_w, height=_adv_map_h)
+    if risk_zone_array is not None:
+        risk_png = generate_risk_zone_map_image(
+            risk_zone_array, array_shape=risk_zone_array.shape)
+        risk_img = RLImage(io.BytesIO(risk_png), width=_adv_map_w, height=_adv_map_h)
+        adv_maps = Table(
+            [[risk_img, slope_img],
+             [Paragraph("Erosion Risk Index Zones (C×LS)", _map_lbl),
+              Paragraph("Terrain Slope (% gradient)", _map_lbl)]],
+            colWidths=[_adv_map_w + 0.1 * inch, _adv_map_w + 0.1 * inch],
+        )
+        adv_maps.setStyle(TableStyle([
+            ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(adv_maps)
+        story.append(Spacer(1, 6))
+    else:
+        story.append(slope_img)
+        story.append(Paragraph("Terrain Slope (% gradient)", _map_lbl))
+        story.append(Spacer(1, 6))
+
+    # Risk zone summary
+    if zone_counts and sum(zone_counts.values()) > 0:
+        story.append(Paragraph("Erosion Risk Zone Summary (C×LS)", section_style))
+        _total_px = sum(zone_counts.values())
+        _ri_cfg = [
+            (4, "Critical", "> 1.5",   "#fecaca"),
+            (3, "High",     "0.7–1.5", "#FEE8D5"),
+            (2, "Moderate", "0.3–0.7", "#FEF9C3"),
+            (1, "Low",      "< 0.3",   "#dcfce7"),
+        ]
+        _ri_rows = [["Zone", "C×LS Range", "Acres", "% of Field"]]
+        for _val, _lbl, _thr, _bg in _ri_cfg:
+            _cnt = zone_counts.get(_val, 0)
+            _ac  = _cnt * acres_per_pixel
+            _pc  = _cnt / _total_px * 100 if _total_px > 0 else 0
+            _ri_rows.append([_lbl, _thr, f"{_ac:.1f}", f"{_pc:.0f}%"])
+        _ri_tbl = Table(_ri_rows,
+                        colWidths=[1.8 * inch, 1.2 * inch, 1.0 * inch, 1.0 * inch])
+        _ri_style = TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("ALIGN",         (1, 0), (-1, -1), "CENTER"),
+            ("GRID",          (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ])
+        for _idx, (_val, _, _, _bg) in enumerate(_ri_cfg, start=1):
+            _ri_style.add("BACKGROUND", (0, _idx), (-1, _idx), colors.HexColor(_bg))
+        _ri_tbl.setStyle(_ri_style)
+        story.append(_ri_tbl)
+        story.append(Spacer(1, 6))
+
+    # Field-level metrics
+    story.append(Paragraph("Field-Level Metrics", section_style))
+    _c_base = risk_result.get("c_factor_baseline", _c_adj)
+    _c_pct  = int((_c_base - _c_adj) / _c_base * 100) if _c_base > 0 else 0
+    _zes = risk_result.get("zone_erosion_summary", [])
+    _a_saved_w = _a_base_w = _a_cur_w = None
+    if _zes:
+        _a_saved_w = sum(z["a_saved_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_saved_zone") is not None) or None
+        _a_base_w  = sum(z["a_baseline_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_baseline_zone") is not None) or None
+        _a_cur_w   = sum(z["a_current_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_current_zone") is not None) or None
+    _pct_red_w = (_a_saved_w / _a_base_w * 100) if _a_base_w else None
+    metrics_rows = [
+        ["Metric", "Value"],
+        ["NDVI mean", f"{_ndvi_mean:.3f}"],
+        ["Slope mean", f"{slope_stats.get('mean', 0):.1f}%"],
+        [f"C-factor ({residue_system or 'residue system'})",
+         f"{_c_adj:.3f}"],
+        ["C-factor reduction vs. baseline", f"{_c_pct}%"],
+        ["Risk Index (C×LS), field mean",
+         f"{risk_result.get('rusle_score', 0):.3f}"],
+    ]
+    if _pct_red_w is not None:
+        metrics_rows.append(["Estimated % erosion reduction (cover vs. bare)",
+                             f"{_pct_red_w:.1f}%"])
+    if _a_base_w is not None:
+        metrics_rows.append(["Baseline soil loss estimate (no cover)",
+                             f"{_a_base_w:.1f} t/ac/yr"])
+    if _a_saved_w is not None:
+        metrics_rows.append(["Estimated soil saved (area-weighted)",
+                             f"{_a_saved_w:.1f} t/ac/yr"])
+    _met_tbl = Table(metrics_rows, colWidths=[3.6 * inch, 2.0 * inch])
+    _met_tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0),  BLUE_ACCENT),
+        ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+        ("ALIGN",          (1, 0), (1, -1),  "CENTER"),
+        ("GRID",           (0, 0), (-1, -1), 0.3, MID_GRAY),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+        ("TOPPADDING",     (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+    ]))
+    story.append(_met_tbl)
+    story.append(Paragraph(
+        f"<i>{A_VALUE_DISCLAIMER}</i>",
+        ParagraphStyle("AValueDisc45", parent=small_style,
+                       textColor=colors.HexColor("#92400e"))))
+    story.append(PageBreak())
+
+    # -----------------------------------------------------------------------
+    # PAGE 3 — § 2100.052(b) PRODUCER RECORDS (fillable AcroForm)
+    # -----------------------------------------------------------------------
+    story.append(Paragraph(
+        "§ 2100.052(b) Producer Records", section_style))
+    story.append(Paragraph(
+        "The fields below are producer-supplied § 2100.052(b) records. "
+        "CoverMap does not generate this content. Producer signature at bottom "
+        "certifies these records exist and are retained for 5 years per "
+        "§ 2100.052(b). Fields are fillable in a PDF viewer or may be "
+        "printed and completed by hand.",
+        wall_style,
+    ))
+    story.append(HRFlowable(width="100%", thickness=1.0,
+                            color=colors.HexColor("#c5d9f5"), spaceBefore=4,
+                            spaceAfter=6))
+    story.append(_ProducerRecordsForm(7 * inch, producer_inputs=producer_inputs))
+    story.append(Spacer(1, 10))
+
+    # Producer attestation + signature block (print / sign / scan convention).
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=6))
+    story.append(Paragraph(
+        "I certify the § 2100.052(b) records above and the underlying "
+        "documentation are true, accurate, and retained for 5 years per 7 CFR "
+        "§ 2100.052(b).",
+        body_style,
+    ))
+    story.append(Spacer(1, 14))
+    story.append(Paragraph(
+        "Producer signature: _________________________&nbsp;&nbsp;&nbsp;"
+        "Date: __________",
+        body_style,
+    ))
+    story.append(Spacer(1, 12))
+
+    # -----------------------------------------------------------------------
+    # FOOTER (retained provenance verbatim + two new regulatory-basis lines)
+    # -----------------------------------------------------------------------
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                            color=MID_GRAY, spaceAfter=3))
+    footer_lines = [
+        f"NDVI Source: Sentinel-2 via Google Earth Engine ({_window_range}) | "
+        f"DEM: {dem_source} | Slope: computed in UTM meters (EPSG:26915)",
+        f"Data provenance — DEM source: {dem_source}  |  "
+        f"R-factor source: {r_factor_note or 'R=%.0f' % r_factor}",
+        "Regulatory basis: 7 CFR Part 2100, § 2100.052(c), effective July 29, "
+        "2026 (91 FR 39334, Docket USDA-2024-0003, RIN 0503-AA82).",
+        "Attachment framing: Supports Biofuel Feedstock Report per 7 CFR "
+        "§ 2100.031(e). Attached as cover crop practice evidence under "
+        "§ 2100.052(c). Not a substitute for USDA FD-CIC calculation "
+        "documentation required under § 2100.031(e)(3)(i).",
+        f"CoverMap 45Z Verification Package · {cca_name} · "
+        f"Report ID {report_id} · {report_date}",
     ]
     for line in footer_lines:
         story.append(Paragraph(line, small_style))
