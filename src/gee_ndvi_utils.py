@@ -27,6 +27,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import geopandas as gpd
 
+from src.qc_utils import qc_signals
+
 # GEE imports with graceful fallback
 _GEE_IMPORT_ERROR = None
 GEE_AVAILABLE = False
@@ -312,8 +314,10 @@ def fetch_ndvi_streamlit(
         date_to=date_to,
     )
 
-    valid     = ndvi[(ndvi > 0.05) & ~np.isnan(ndvi)]
-    valid_pct = valid.size / ndvi.size * 100 if ndvi.size > 0 else 0
+    # Signal 1 (valid pixel fraction, three-tier) via the shared QC helper so
+    # this top box, the 45Z report, and the CCA/producer PDFs stay identical.
+    # Denominator is non-NaN field pixels (qc_utils), matching the other surfaces.
+    _qc       = qc_signals(ndvi, scene_count=scene_meta.get("count", 0))
     mean_ndvi = float(np.nanmean(ndvi))
 
     scene_count = scene_meta.get("count", 0)
@@ -323,16 +327,12 @@ def fetch_ndvi_streamlit(
     message = (
         f"✅ Sentinel-2 NDVI via Google Earth Engine | "
         f"{scene_count} scene(s) · {d_from} – {d_to} | "
-        f"{valid_pct:.0f}% valid pixels (NDVI > 0.05) | "
+        f"{_qc['valid_text']} | "
         f"Mean NDVI: {mean_ndvi:.3f}"
     )
 
+    # Signals 2 (single-scene) and 3 (saturation) are surfaced uniformly by the
+    # caller (app.py) for all NDVI input modes, so no warning is returned here.
     warning = None
-    if scene_count == 1:
-        warning = (
-            "⚠️ Single scene only — cloud contamination risk is elevated. "
-            "Widen date range for a more reliable composite before using for "
-            "EQIP documentation."
-        )
 
     return ndvi, transform, profile, message, scene_meta, warning

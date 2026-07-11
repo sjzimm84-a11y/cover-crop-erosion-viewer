@@ -37,6 +37,7 @@ from src.report_generator import (
     generate_producer_report,
     generate_45z_verification_report,
 )
+from src.qc_utils import qc_signals
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
@@ -569,6 +570,21 @@ if ndvi_stats["mean"] < -0.05:
         f"cloud filter threshold."
     )
     st.stop()
+
+# QC Signals 2 (single-scene) and 3 (saturation) — advisory, surfaced beneath
+# the NDVI top box for every input mode via the shared qc_utils helper so the
+# wording matches the 45Z and CCA/producer reports. Signal 1 (valid-pixel tier)
+# rides inside the top-box message; Signal 4 (negative mean) is hard-blocked
+# above. No gating here — warnings only.
+_qc_top = qc_signals(
+    ndvi_array,
+    scene_count=st.session_state.get("ndvi_scene_count"),
+    mean_ndvi=ndvi_stats["mean"],
+)
+if _qc_top["single_scene"]:
+    st.warning(f"⚠️ {_qc_top['single_scene']}")
+if _qc_top["saturation"]:
+    st.warning(f"⚠️ {_qc_top['saturation']}")
 
 # ---------------------------------------------------------------------------
 # Area-weighted soil K/T from SSURGO (Soil Data Access).
@@ -1318,11 +1334,8 @@ st.caption(
     f"({residue_system}). Exponential model, pre-calibration."
 )
 
-if ndvi_stats["mean"] > 0.75:
-    st.warning(
-        "⚠️ High NDVI may indicate mature cash crops rather than cover crops. "
-        "Verify image date — early spring pull recommended for accurate assessment."
-    )
+# Saturation (Signal 3) is surfaced with the other QC signals beneath the NDVI
+# top box (see qc_signals block above), keeping all QC wording in one place.
 
 # === SECTION 6: ESTIMATED SOIL LOSS ===
 st.subheader("📊 Estimated Soil Loss vs. Soil Loss Tolerance")
@@ -1426,6 +1439,7 @@ _pdf_kwargs = dict(
     r_factor=st.session_state.get("r_factor", 175.0),
     r_factor_note=st.session_state.get("r_factor_note"),
     acres_per_pixel=_acres_per_pixel,
+    scene_count=st.session_state.ndvi_scene_count,
 )
 
 col_cca, col_prod, col_45z = st.columns(3)
@@ -1472,10 +1486,10 @@ with col_45z:
             try:
                 # Producer § 2100.052(b) fields are fillable in the PDF itself
                 # (decision: not Streamlit inputs) — pass an empty dict here.
+                # scene_count is already in _pdf_kwargs (shared across reports).
                 pdf_bytes = generate_45z_verification_report(
                     **_pdf_kwargs,
                     producer_inputs={},
-                    scene_count=st.session_state.ndvi_scene_count,
                     ndvi_scene_from=st.session_state.ndvi_scene_earliest,
                     ndvi_scene_to=st.session_state.ndvi_scene_latest,
                     valid_pixel_fraction=_valid_pct,

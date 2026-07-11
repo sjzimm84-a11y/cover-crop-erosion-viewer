@@ -24,6 +24,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap
 
+from src.qc_utils import qc_signals, valid_tier
+
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -320,6 +322,7 @@ def generate_field_report(
     r_factor: float = 150.0,
     r_factor_note: Optional[str] = None,
     acres_per_pixel: float = (10.0 ** 2) / 4046.86,
+    scene_count: Optional[int] = None,
 ) -> bytes:
     """
     Generate single-page PDF field summary report.
@@ -780,6 +783,11 @@ def generate_field_report(
     _c_display = f"{_c_adj:.3f} ({_c_pct}% reduction vs. baseline)"
     _c_label   = "C-Factor (exp. model)"
 
+    # QC signals (Signal 1 valid-pixel tier) via the shared helper so this
+    # field-metrics table matches the app top box and the 45Z report exactly.
+    _qc_cca = qc_signals(ndvi_array, scene_count=scene_count,
+                         mean_ndvi=ndvi_stats.get("mean", 0.0))
+
     metrics = [
         ["Metric", "Value"],
         ["NDVI Mean",         f"{ndvi_stats.get('mean', 0):.3f}"],
@@ -788,6 +796,8 @@ def generate_field_report(
         [_c_label,            _c_display],
         ["Risk Index (C\u00d7LS)", f"{risk_result.get('rusle_score', 0):.3f}"],
         ["Erosion Concern",   concern],
+        ["Valid Pixels (QC)",
+         f"{_qc_cca['valid_pct']:.0f}% \u2014 {_qc_cca['valid_phrase']}"],
     ]
 
     met_style = TableStyle([
@@ -807,6 +817,12 @@ def generate_field_report(
     met_table = Table(metrics, colWidths=[1.8 * inch, 1.8 * inch])
     met_table.setStyle(met_style)
     story.append(met_table)
+    # QC Signals 2 (single-scene) and 3 (saturation) \u2014 conditional advisory lines.
+    _qc_amber = ParagraphStyle("QCAmber", parent=small_style,
+                               textColor=colors.HexColor("#92400e"))
+    for _qc_line in (_qc_cca["single_scene"], _qc_cca["saturation"]):
+        if _qc_line:
+            story.append(Paragraph(f"<i>QC: {_qc_line}</i>", _qc_amber))
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
@@ -1186,6 +1202,7 @@ def generate_producer_report(
     r_factor: float = 150.0,
     r_factor_note: Optional[str] = None,
     acres_per_pixel: float = (10.0 ** 2) / 4046.86,
+    scene_count: Optional[int] = None,
 ) -> bytes:
     """
     Simplified single-page PDF field summary for producers.
@@ -1624,6 +1641,11 @@ def generate_producer_report(
     _c_display = f"{_c_adj:.3f} ({_c_pct}% reduction vs. baseline)"
     _c_label   = "C-Factor (exp. model)"
 
+    # QC signals (Signal 1 valid-pixel tier) via the shared helper so this
+    # field-metrics table matches the app top box and the 45Z report exactly.
+    _qc_prod = qc_signals(ndvi_array, scene_count=scene_count,
+                          mean_ndvi=ndvi_stats.get("mean", 0.0))
+
     metrics = [
         ["Metric", "Value"],
         ["NDVI Mean",         f"{ndvi_stats.get('mean', 0):.3f}"],
@@ -1632,6 +1654,8 @@ def generate_producer_report(
         [_c_label,            _c_display],
         ["Risk Index (C×LS)", f"{risk_result.get('rusle_score', 0):.3f}"],
         ["Erosion Concern",   concern],
+        ["Valid Pixels (QC)",
+         f"{_qc_prod['valid_pct']:.0f}% — {_qc_prod['valid_phrase']}"],
     ]
 
     met_style = TableStyle([
@@ -1651,6 +1675,12 @@ def generate_producer_report(
     met_table = Table(metrics, colWidths=[1.8 * inch, 1.8 * inch])
     met_table.setStyle(met_style)
     story.append(met_table)
+    # QC Signals 2 (single-scene) and 3 (saturation) — conditional advisory lines.
+    _qc_amber_p = ParagraphStyle("QCAmberP", parent=small_style,
+                                 textColor=colors.HexColor("#92400e"))
+    for _qc_line in (_qc_prod["single_scene"], _qc_prod["saturation"]):
+        if _qc_line:
+            story.append(Paragraph(f"<i>QC: {_qc_line}</i>", _qc_amber_p))
     story.append(Spacer(1, 8))
 
     # --- Cover Crop Erosion Reduction ---
@@ -1972,20 +2002,21 @@ def generate_45z_verification_report(
         _fd = (field_name or "").strip() or "Field"
         report_id = f"{_fn}-{_fd}"
 
-    # Valid pixel fraction: prefer the app-supplied value; else compute inline
-    # with the same definition the pipeline/UI use (NDVI > 0.05 over the
-    # boundary-masked field). Rendering-only — no gate is enforced here.
-    _nonnan = ndvi_array[~np.isnan(ndvi_array)]
+    # QC signals via the shared helper so the 45Z evidence page matches the app
+    # top box and the CCA/producer reports exactly (same formula + phrasing).
+    # Signal 1 three-tier phrase, Signal 2 single-scene, Signal 3 saturation.
+    # Rendering-only — no gate is enforced here (Signal 4 is blocked upstream).
+    _ndvi_mean = ndvi_stats.get("mean", 0.0)
+    if scene_count is None:
+        scene_count = risk_result.get("scene_count")
+    _qc45 = qc_signals(ndvi_array, scene_count=scene_count, mean_ndvi=_ndvi_mean)
     if valid_pixel_fraction is None:
-        _denom = _nonnan.size
-        valid_pixel_fraction = (
-            float(np.sum(_nonnan > 0.05)) / _denom * 100.0 if _denom > 0 else 0.0
-        )
-    _vpf_qc_pass = valid_pixel_fraction >= 75.0
+        valid_pixel_fraction = _qc45["valid_pct"]
+    _vpf_tier, _vpf_phrase = valid_tier(valid_pixel_fraction)
+    _nonnan = ndvi_array[~np.isnan(ndvi_array)]
 
     # Establishment determination — reuse the existing "cover crop confirmed"
     # gate (field NDVI mean vs. threshold). No new scoring logic.
-    _ndvi_mean = ndvi_stats.get("mean", 0.0)
     _established = _ndvi_mean >= ndvi_threshold
 
     # Establishment pixel fraction (>= 0.20) — the defensible headline metric,
@@ -2000,8 +2031,6 @@ def generate_45z_verification_report(
     _est_acres      = _pct_ge_thresh / 100.0 * _total_acres_45
 
     # Scene metadata for the evidence table.
-    if scene_count is None:
-        scene_count = risk_result.get("scene_count")
     _scene_range = (
         f"{ndvi_scene_from} – {ndvi_scene_to}"
         if ndvi_scene_from and ndvi_scene_to
@@ -2130,7 +2159,8 @@ def generate_45z_verification_report(
         "CalloutBody", parent=body_style, fontSize=9, leading=13,
     )
     _vpf_line = (
-        f"{valid_pixel_fraction:.0f}%" if valid_pixel_fraction is not None else "—"
+        f"{valid_pixel_fraction:.0f}% — {_vpf_phrase}"
+        if valid_pixel_fraction is not None else "—"
     )
     callout_rows = [
         [Paragraph("§ 2100.052(c) COVER CROP ESTABLISHMENT VERIFICATION",
@@ -2151,10 +2181,18 @@ def generate_45z_verification_report(
             _callout_body)],
         [Paragraph(
             f"Valid pixel fraction: <b>{_vpf_line}</b> "
-            f"({'QC pass' if _vpf_qc_pass else 'below 75% — QC caution'}; "
-            f"≥ 75% required for report generation)",
+            f"(≥ 75% required for report generation)",
             _callout_body)],
     ]
+    # QC Signals 2 (single-scene) and 3 (saturation) — conditional, shown in the
+    # § 2100.052(c) callout only when triggered (Bin Field triggers neither).
+    if _qc45["single_scene"]:
+        callout_rows.append([Paragraph(
+            f"<b>Single-scene composite:</b> {_qc45['single_scene']}",
+            _callout_body)])
+    if _qc45["saturation"]:
+        callout_rows.append([Paragraph(
+            f"<b>Saturation:</b> {_qc45['saturation']}", _callout_body)])
     callout = Table(callout_rows, colWidths=[7 * inch])
     callout.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#f0f6ff")),
@@ -2195,8 +2233,7 @@ def generate_45z_verification_report(
          "NDVI > 0.05 (excludes water, cloud shadow, saturated bare soil)",
          "Tech Guide QC"],
         ["Valid pixel fraction",
-         f"{_vpf_line} — {'QC pass' if _vpf_qc_pass else 'QC caution'} "
-         f"(≥ 75% required)",
+         f"{_vpf_line} (≥ 75% required)",
          "Pipeline gate"],
         ["NDVI mean", f"{_ndvi_mean:.3f}", "Field-mean, boundary-masked"],
         ["NDVI range",
