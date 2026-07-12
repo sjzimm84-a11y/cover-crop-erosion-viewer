@@ -63,6 +63,8 @@ import requests
 from shapely import wkt as shapely_wkt
 from shapely.geometry.base import BaseGeometry
 
+from src.qc_utils import ZONE_LABELS
+
 _log = logging.getLogger(__name__)
 
 SDA_ENDPOINT = "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
@@ -608,7 +610,7 @@ def zone_mukey_tolerance_rows(
     from shapely.ops import transform as _shp_transform
     from pyproj import Transformer
 
-    labels = zone_labels or {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
+    labels = zone_labels or ZONE_LABELS
     a_by_zone      = a_by_zone or {}
     slope_by_zone  = slope_by_zone or {}
     k_by_mukey     = k_by_mukey or {}
@@ -663,7 +665,15 @@ def zone_mukey_tolerance_rows(
             continue
         label  = labels.get(zone_val)
         a_zone = a_by_zone.get(zone_val, a_by_zone.get(label))
+        if zone_val not in a_by_zone and label not in a_by_zone:
+            _log.warning(
+                "zone_mukey_tolerance_rows: no a_by_zone entry for zone_val=%s "
+                "label=%s — row will have None values", zone_val, label)
         slope_zone = slope_by_zone.get(zone_val, slope_by_zone.get(label))
+        if zone_val not in slope_by_zone and label not in slope_by_zone:
+            _log.warning(
+                "zone_mukey_tolerance_rows: no slope_by_zone entry for zone_val=%s "
+                "label=%s — row will have None values", zone_val, label)
 
         for mk, mgeom, t_val in repaired_mu:
             try:

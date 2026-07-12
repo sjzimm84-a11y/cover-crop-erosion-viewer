@@ -21,6 +21,12 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+# Canonical Risk Index zone labels (zone value 1-4 -> label). Single source of
+# truth — scoring.py and soil_data.py import this; the strings are also the
+# join key between the zone erosion summary and the zone x map-unit tolerance
+# rows, so they must never be redefined locally.
+ZONE_LABELS = {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
+
 # Thresholds — from the Tech Guide QC rules table.
 VALID_NDVI_FLOOR = 0.05    # a pixel counts as "valid" above this NDVI
 QC_PASS_PCT      = 75.0    # >= this -> QC pass

@@ -36,6 +36,8 @@ from pathlib import Path
 import logging
 import numpy as np
 
+from src.qc_utils import ZONE_LABELS
+
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -502,7 +504,7 @@ def _compute_zone_erosion_summary(
     except (TypeError, ValueError):
         k = None
 
-    zone_labels = {1: "Low", 2: "Moderate", 3: "High", 4: "Critical"}
+    zone_labels = ZONE_LABELS
     valid_mask  = ~np.isnan(ndvi_array) & ~np.isnan(zone_array)
     total_valid = int(np.sum(valid_mask))
     if total_valid == 0:
