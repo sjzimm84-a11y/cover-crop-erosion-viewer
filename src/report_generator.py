@@ -830,21 +830,22 @@ def generate_field_report(
     # -----------------------------------------------------------------------
     _zes = risk_result.get("zone_erosion_summary", [])
     if _zes:
-        _a_saved_weighted_r    = sum(
-            z["a_saved_zone"]    * z["area_fraction"]
-            for z in _zes if z.get("a_saved_zone") is not None
-        ) or None
-        _a_baseline_weighted_r = sum(
-            z["a_baseline_zone"] * z["area_fraction"]
-            for z in _zes if z.get("a_baseline_zone") is not None
-        ) or None
-        _a_current_weighted_r  = sum(
-            z["a_current_zone"]  * z["area_fraction"]
-            for z in _zes if z.get("a_current_zone") is not None
-        ) or None
+        # A legitimate weighted 0.0 (e.g. NDVI at/below the living-cover
+        # baseline in every zone) must stay 0.0 — `sum(...) or None` coerced
+        # it to None and crashed the division below. Matches app.py:712-723.
+        _saved_vals_r = [z["a_saved_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_saved_zone") is not None]
+        _base_vals_r  = [z["a_baseline_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_baseline_zone") is not None]
+        _cur_vals_r   = [z["a_current_zone"] * z["area_fraction"]
+                         for z in _zes if z.get("a_current_zone") is not None]
+        _a_saved_weighted_r    = sum(_saved_vals_r) if _saved_vals_r else None
+        _a_baseline_weighted_r = sum(_base_vals_r)  if _base_vals_r  else None
+        _a_current_weighted_r  = sum(_cur_vals_r)   if _cur_vals_r   else None
         _pct_reduction_weighted_r = (
             (_a_saved_weighted_r / _a_baseline_weighted_r) * 100
-            if _a_baseline_weighted_r else None
+            if (_a_baseline_weighted_r and _a_saved_weighted_r is not None)
+            else None
         )
         story.append(HRFlowable(width="100%", thickness=0.5,
                                 color=MID_GRAY, spaceAfter=4))
@@ -1686,17 +1687,17 @@ def generate_producer_report(
     # --- Cover Crop Erosion Reduction ---
     _zes_p = risk_result.get("zone_erosion_summary", [])
     if _zes_p:
-        _a_saved_weighted_p    = sum(
-            z["a_saved_zone"]    * z["area_fraction"]
-            for z in _zes_p if z.get("a_saved_zone") is not None
-        ) or None
-        _a_baseline_weighted_p = sum(
-            z["a_baseline_zone"] * z["area_fraction"]
-            for z in _zes_p if z.get("a_baseline_zone") is not None
-        ) or None
+        # 0.0 savings is a real value, not "unavailable" — see CCA-report note.
+        _saved_vals_p = [z["a_saved_zone"] * z["area_fraction"]
+                         for z in _zes_p if z.get("a_saved_zone") is not None]
+        _base_vals_p  = [z["a_baseline_zone"] * z["area_fraction"]
+                         for z in _zes_p if z.get("a_baseline_zone") is not None]
+        _a_saved_weighted_p    = sum(_saved_vals_p) if _saved_vals_p else None
+        _a_baseline_weighted_p = sum(_base_vals_p)  if _base_vals_p  else None
         _pct_reduction_weighted_p = (
             (_a_saved_weighted_p / _a_baseline_weighted_p) * 100
-            if _a_baseline_weighted_p else None
+            if (_a_baseline_weighted_p and _a_saved_weighted_p is not None)
+            else None
         )
         if _pct_reduction_weighted_p is not None:
             cc_red_rows_p = [
@@ -2429,13 +2430,18 @@ def generate_45z_verification_report(
     _zes = risk_result.get("zone_erosion_summary", [])
     _a_saved_w = _a_base_w = _a_cur_w = None
     if _zes:
-        _a_saved_w = sum(z["a_saved_zone"] * z["area_fraction"]
-                         for z in _zes if z.get("a_saved_zone") is not None) or None
-        _a_base_w  = sum(z["a_baseline_zone"] * z["area_fraction"]
-                         for z in _zes if z.get("a_baseline_zone") is not None) or None
-        _a_cur_w   = sum(z["a_current_zone"] * z["area_fraction"]
-                         for z in _zes if z.get("a_current_zone") is not None) or None
-    _pct_red_w = (_a_saved_w / _a_base_w * 100) if _a_base_w else None
+        # 0.0 savings is a real value, not "unavailable" — see CCA-report note.
+        _saved_vals_45 = [z["a_saved_zone"] * z["area_fraction"]
+                          for z in _zes if z.get("a_saved_zone") is not None]
+        _base_vals_45  = [z["a_baseline_zone"] * z["area_fraction"]
+                          for z in _zes if z.get("a_baseline_zone") is not None]
+        _cur_vals_45   = [z["a_current_zone"] * z["area_fraction"]
+                          for z in _zes if z.get("a_current_zone") is not None]
+        _a_saved_w = sum(_saved_vals_45) if _saved_vals_45 else None
+        _a_base_w  = sum(_base_vals_45)  if _base_vals_45  else None
+        _a_cur_w   = sum(_cur_vals_45)   if _cur_vals_45   else None
+    _pct_red_w = ((_a_saved_w / _a_base_w * 100)
+                  if (_a_base_w and _a_saved_w is not None) else None)
     metrics_rows = [
         ["Metric", "Value"],
         ["NDVI mean", f"{_ndvi_mean:.3f}"],
