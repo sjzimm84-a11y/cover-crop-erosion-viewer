@@ -612,6 +612,7 @@ def zone_mukey_tolerance_rows(
 
     labels = zone_labels or ZONE_LABELS
     a_by_zone      = a_by_zone or {}
+    _slope_by_zone_supplied = slope_by_zone is not None
     slope_by_zone  = slope_by_zone or {}
     k_by_mukey     = k_by_mukey or {}
     musym_by_mukey = musym_by_mukey or {}
@@ -670,7 +671,8 @@ def zone_mukey_tolerance_rows(
                 "zone_mukey_tolerance_rows: no a_by_zone entry for zone_val=%s "
                 "label=%s — row will have None values", zone_val, label)
         slope_zone = slope_by_zone.get(zone_val, slope_by_zone.get(label))
-        if zone_val not in slope_by_zone and label not in slope_by_zone:
+        if (_slope_by_zone_supplied
+                and zone_val not in slope_by_zone and label not in slope_by_zone):
             _log.warning(
                 "zone_mukey_tolerance_rows: no slope_by_zone entry for zone_val=%s "
                 "label=%s — row will have None values", zone_val, label)
