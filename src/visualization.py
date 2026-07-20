@@ -453,9 +453,9 @@ def build_yoy_ndvi_figure(yoy_rows: list):
     """
     Year-over-year early-season NDVI bar chart (Plotly figure).
 
-    Pure figure builder — no Streamlit calls, no I/O. Figure construction is
-    copied verbatim from the original inline app code so the chart the app
-    renders is unchanged; the producer report reuses the same rows for its
+    Pure figure builder — no Streamlit calls, no I/O. Figure construction
+    matches the original inline app code (title updated for the Mar 15 –
+    Apr 20 window); the producer report reuses the same rows for its
     matplotlib PNG replica (kaleido is not a project dependency, so the
     Plotly figure itself cannot be exported to PNG).
 
@@ -464,7 +464,7 @@ def build_yoy_ndvi_figure(yoy_rows: list):
     yoy_df = pd.DataFrame(yoy_rows)
     fig_yoy = px.bar(
         yoy_df, x="Year", y="Mean NDVI",
-        title="Early-Season NDVI Trend (March–April)",
+        title="Early-Season NDVI Trend (Mar 15–Apr 20)",
         color="Mean NDVI",
         color_continuous_scale="RdYlGn",
         text="Mean NDVI",

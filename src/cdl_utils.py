@@ -176,6 +176,31 @@ def boundary_to_ee_geometry(boundary_gdf: gpd.GeoDataFrame) -> "ee.Geometry":
     return ee.Geometry(_shp_mapping(geom))
 
 
+def confident_previous_crop(rotation_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The previous crop for the current cover crop season, but only when CDL is
+    confident about it.
+
+    Uses the most recent rotation row only (rows are most-recent-first; that
+    year is the cash crop the cover crop was seeded into). Returns
+    {"crop": str, "year": int, "pct": float} when that row carries a clean
+    >=70% single-crop label (label == dominant class, i.e. the Corn/Soybeans
+    threshold branches) — None otherwise, including "Predominantly"/"Mixed"
+    labels and unpublished years. An older year is never substituted: if the
+    immediately preceding season is unknown, the right answer is blank.
+    """
+    if not rotation_rows:
+        return None
+    row = rotation_rows[0]
+    if (
+        row.get("dominant_pct") is not None
+        and row["dominant_pct"] >= 70.0
+        and row.get("label") == row.get("dominant_class")
+    ):
+        return {"crop": row["label"], "year": row["year"], "pct": row["dominant_pct"]}
+    return None
+
+
 def get_cdl_rotation_rows(
     boundary_gdf: gpd.GeoDataFrame,
     n_years: int = 3,

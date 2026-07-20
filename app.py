@@ -38,7 +38,7 @@ from src.report_generator import (
     generate_45z_verification_report,
 )
 from src.qc_utils import qc_signals
-from src.cdl_utils import get_cdl_rotation_rows
+from src.cdl_utils import get_cdl_rotation_rows, confident_previous_crop
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
@@ -1371,6 +1371,26 @@ else:
 
 # === SECTION 7: GENERATE REPORT ===
 st.subheader("📄 Generate Report")
+
+# --- USDA CDL rotation: fetched once per boundary (auto, on field load) ---
+# Prefills the Previous crop input below and is reused by the producer
+# report's rotation table. The boundary fingerprint gates both the fetch and
+# the reuse, and is set even on failure so a broken GEE session doesn't
+# re-fire the fetch on every rerun.
+_cdl_bkey = str([round(v, 6) for v in field_boundary.total_bounds])
+if st.session_state.get("cdl_rotation_bkey") != _cdl_bkey and SENTINEL_AVAILABLE:
+    try:
+        with st.spinner("Fetching USDA CDL rotation history..."):
+            st.session_state.cdl_rotation_rows = (
+                get_cdl_rotation_rows(field_boundary) or None)
+    except Exception:
+        st.session_state.cdl_rotation_rows = None
+    st.session_state.cdl_rotation_bkey = _cdl_bkey
+_cdl_rotation = (
+    st.session_state.get("cdl_rotation_rows")
+    if st.session_state.get("cdl_rotation_bkey") == _cdl_bkey else None
+)
+_cdl_prev = confident_previous_crop(_cdl_rotation or [])
 col_a, col_b, col_c = st.columns(3)
 with col_a:
     _default_field_name = Path(boundary_file.name).stem if boundary_file else "North Field"
@@ -1392,7 +1412,18 @@ with col_e:
     pdf_cca_name = st.text_input("CCA name", value="Stephen Zimmerman, CCA MS")
 with col_f:
     pdf_previous_crop = st.text_input(
-        "Previous crop (optional)", value="", placeholder="e.g. Corn, Soybeans")
+        "Previous crop (optional)",
+        value=(_cdl_prev["crop"] if _cdl_prev else ""),
+        placeholder="e.g. Corn, Soybeans",
+        help=(
+            f"Auto-filled from USDA CDL {_cdl_prev['year']} "
+            f"({_cdl_prev['crop']}, {_cdl_prev['pct']:.0f}% pixel share). "
+            "Edit if incorrect."
+            if _cdl_prev else
+            "CDL could not confidently identify last season's crop "
+            "(needs a ≥70% single-crop year) — enter manually."
+        ),
+    )
 
 _pdf_kwargs = dict(
     field_name=pdf_field_name or "Field",
@@ -1448,11 +1479,11 @@ with col_prod:
     if st.button("🌾 Producer Report", use_container_width=True):
         with st.spinner("Generating producer report..."):
             try:
-                # YoY early-season NDVI chart + CDL rotation table (both
-                # report-only). Reuse rows cached for this boundary if
-                # available; otherwise fetch now via the shared functions.
-                # Failures (e.g. GEE not configured in upload mode) just omit
-                # the corresponding report section.
+                # YoY early-season NDVI chart (report-only). Reuse rows cached
+                # for this boundary if available; otherwise fetch now via the
+                # shared function. Failures (e.g. GEE not configured in upload
+                # mode) just omit the chart section. CDL rotation rows were
+                # already fetched per-boundary above (Previous-crop prefill).
                 _bkey = str([round(v, 6) for v in field_boundary.total_bounds])
                 _yoy_rows = (
                     st.session_state.get("yoy_ndvi_rows")
@@ -1465,17 +1496,6 @@ with col_prod:
                         st.session_state.yoy_ndvi_bkey = _bkey
                     except Exception:
                         _yoy_rows = None
-                _cdl_rotation = (
-                    st.session_state.get("cdl_rotation_rows")
-                    if st.session_state.get("cdl_rotation_bkey") == _bkey else None
-                )
-                if not _cdl_rotation and SENTINEL_AVAILABLE:
-                    try:
-                        _cdl_rotation = get_cdl_rotation_rows(field_boundary)
-                        st.session_state.cdl_rotation_rows = _cdl_rotation or None
-                        st.session_state.cdl_rotation_bkey = _bkey
-                    except Exception:
-                        _cdl_rotation = None
                 pdf_bytes = generate_producer_report(
                     **_pdf_kwargs, yoy_rows=_yoy_rows, cdl_rotation=_cdl_rotation)
                 st.download_button(

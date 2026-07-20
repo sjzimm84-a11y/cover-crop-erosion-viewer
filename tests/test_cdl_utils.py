@@ -121,3 +121,36 @@ def test_class_map_covers_spec_codes():
         assert code in CDL_CLASS_MAP
     assert NON_AG_CODES == {82, 111, 121, 122, 123, 124, 141, 142, 143, 152, 176}
     assert NON_AG_CODES <= set(CDL_CLASS_MAP)
+
+
+# --- confident_previous_crop (Previous-crop autofill guard) -----------------
+
+from src.cdl_utils import confident_previous_crop, _placeholder_result
+
+
+def test_prev_crop_clean_label_fills():
+    rows = [
+        classify_cdl_histogram({"1": 950, "5": 50}, 2025),   # Corn 95%
+        classify_cdl_histogram({"5": 800, "1": 200}, 2024),
+    ]
+    r = confident_previous_crop(rows)
+    assert r == {"crop": "Corn", "year": 2025, "pct": 95.0}
+
+
+def test_prev_crop_predominant_does_not_fill():
+    rows = [classify_cdl_histogram({"1": 580, "5": 420}, 2025)]  # 58% — below 70
+    assert confident_previous_crop(rows) is None
+
+
+def test_prev_crop_unpublished_year_never_falls_back():
+    # Most recent season unknown -> blank, even though 2024 is a clean Corn
+    # year. An older year must never be substituted as "previous crop".
+    rows = [
+        _placeholder_result(2026, "Not yet published"),
+        classify_cdl_histogram({"1": 900, "5": 100}, 2024),
+    ]
+    assert confident_previous_crop(rows) is None
+
+
+def test_prev_crop_empty_rows():
+    assert confident_previous_crop([]) is None

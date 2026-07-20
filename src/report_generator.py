@@ -1750,7 +1750,7 @@ def generate_producer_report(
         story.append(RLImage(io.BytesIO(yoy_png),
                              width=5.5 * inch, height=2.4 * inch))
         story.append(Paragraph(
-            "<i>Mean field NDVI for the March 1 – April 30 early-season window "
+            "<i>Mean field NDVI for the March 15 – April 20 early-season window "
             "of each year, Sentinel-2 via Google Earth Engine.</i>",
             small_style,
         ))
@@ -1884,6 +1884,12 @@ def generate_producer_report(
         "This report is advisory only and does not constitute an official NRCS determination.",
         f"CoverMap Field Report · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
     ]
+    if yoy_rows:
+        footer_lines.insert(-1, (
+            "NDVI window: March 15 – April 20. Chosen to capture rye "
+            "biomass-accumulation phase between dormancy and typical "
+            "pre-termination."
+        ))
     if cdl_rotation:
         footer_lines.insert(-1, (
             "Crop rotation derived from USDA NASS Cropland Data Layer (30 m "

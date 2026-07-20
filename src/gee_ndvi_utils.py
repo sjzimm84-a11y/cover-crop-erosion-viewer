@@ -342,16 +342,27 @@ def fetch_ndvi_streamlit(
 # Year-over-year early-season NDVI
 # ---------------------------------------------------------------------------
 
+# Default YoY window as (month, day). March 15 - April 20 is chosen to capture
+# the rye biomass-accumulation phase between dormancy and typical
+# pre-termination. GEE filterDate end is exclusive, so the end bound is
+# April 21 to make April 20 the last included scene date.
+MAR_APR_START = (3, 15)
+MAR_APR_END   = (4, 21)
+
+
 def fetch_yoy_ndvi_rows(
     boundary_gdf: gpd.GeoDataFrame,
     start_year: int = 2023,
     end_year: Optional[int] = None,
+    window_start: Tuple[int, int] = MAR_APR_START,
+    window_end: Tuple[int, int] = MAR_APR_END,
 ) -> list:
     """
-    Mean field NDVI for the early-season window (March 1 - April 30) of each
-    year from start_year through end_year (default: current year). One GEE
-    fetch per year; a year whose fetch fails or returns no valid pixels is
-    skipped, matching the original inline app behavior.
+    Mean field NDVI for the early-season window (default March 15 - April 20,
+    see MAR_APR_START/MAR_APR_END) of each year from start_year through
+    end_year (default: current year). One GEE fetch per year; a year whose
+    fetch fails or returns no valid pixels is skipped, matching the original
+    inline app behavior.
 
     No Streamlit calls and no side effects — shared by the app's YoY chart
     and the producer report. GEE auth must already be initialized.
@@ -365,8 +376,8 @@ def fetch_yoy_ndvi_rows(
         try:
             arr, _, _, _ = fetch_ndvi_for_field(
                 boundary_gdf,
-                date_from=datetime(yr, 3, 1),
-                date_to=datetime(yr, 4, 30),
+                date_from=datetime(yr, *window_start),
+                date_to=datetime(yr, *window_end),
             )
             valid = arr[~np.isnan(arr)]
             if valid.size > 0:
