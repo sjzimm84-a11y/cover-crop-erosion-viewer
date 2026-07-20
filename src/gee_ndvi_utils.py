@@ -336,3 +336,41 @@ def fetch_ndvi_streamlit(
     warning = None
 
     return ndvi, transform, profile, message, scene_meta, warning
+
+
+# ---------------------------------------------------------------------------
+# Year-over-year early-season NDVI
+# ---------------------------------------------------------------------------
+
+def fetch_yoy_ndvi_rows(
+    boundary_gdf: gpd.GeoDataFrame,
+    start_year: int = 2023,
+    end_year: Optional[int] = None,
+) -> list:
+    """
+    Mean field NDVI for the early-season window (March 1 - April 30) of each
+    year from start_year through end_year (default: current year). One GEE
+    fetch per year; a year whose fetch fails or returns no valid pixels is
+    skipped, matching the original inline app behavior.
+
+    No Streamlit calls and no side effects — shared by the app's YoY chart
+    and the producer report. GEE auth must already be initialized.
+
+    Returns [{"Year": 2023, "Mean NDVI": 0.300}, ...].
+    """
+    if end_year is None:
+        end_year = datetime.now().year
+    rows = []
+    for yr in range(start_year, end_year + 1):
+        try:
+            arr, _, _, _ = fetch_ndvi_for_field(
+                boundary_gdf,
+                date_from=datetime(yr, 3, 1),
+                date_to=datetime(yr, 4, 30),
+            )
+            valid = arr[~np.isnan(arr)]
+            if valid.size > 0:
+                rows.append({"Year": yr, "Mean NDVI": round(float(valid.mean()), 3)})
+        except Exception:
+            pass
+    return rows

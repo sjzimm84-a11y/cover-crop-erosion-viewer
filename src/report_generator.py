@@ -255,6 +255,53 @@ def generate_risk_zone_map_image(
     return buf.getvalue()
 
 
+def generate_yoy_ndvi_chart_image(
+    yoy_rows: List[Dict[str, Any]],
+    width_in: float = 5.5,
+    height_in: float = 2.4,
+    dpi: int = 300,
+) -> bytes:
+    """
+    Year-over-year early-season NDVI bar chart PNG for PDF embedding.
+
+    Matplotlib replica of the app's Plotly YoY chart (kaleido is not a
+    project dependency, so the Plotly figure cannot be exported directly).
+    Same data rows as the app chart, same RdYlGn coloring by NDVI value,
+    year labels on the axis and mean NDVI as data labels — light theme to
+    match the printed report.
+    """
+    years  = [r["Year"] for r in yoy_rows]
+    values = [r["Mean NDVI"] for r in yoy_rows]
+
+    cmap = plt.get_cmap("RdYlGn")
+    vmin, vmax = min(values), max(values)
+    span = (vmax - vmin) or 1.0
+    bar_colors = [cmap((v - vmin) / span) for v in values]
+
+    fig, ax = plt.subplots(figsize=(width_in, height_in), dpi=dpi)
+    bars = ax.bar([str(y) for y in years], values, color=bar_colors,
+                  edgecolor="#d0d7de", linewidth=0.5)
+    for bar, v in zip(bars, values):
+        ax.annotate(
+            f"{v:.3f}",
+            xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 2), textcoords="offset points",
+            ha="center", va="bottom", fontsize=7, color="#1f2328",
+        )
+    ax.set_ylabel("Mean NDVI", fontsize=8)
+    ax.set_ylim(0, max(values) * 1.18)
+    ax.tick_params(labelsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout(pad=0.4)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, facecolor="white", edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Zone acreage calculator
 # ---------------------------------------------------------------------------
@@ -1205,10 +1252,20 @@ def generate_producer_report(
     r_factor_note: Optional[str] = None,
     acres_per_pixel: float = (10.0 ** 2) / 4046.86,
     scene_count: Optional[int] = None,
+    yoy_rows: Optional[List[Dict[str, Any]]] = None,
+    cdl_rotation: Optional[List[Dict[str, Any]]] = None,
 ) -> bytes:
     """
     Simplified single-page PDF field summary for producers.
     Returns PDF bytes ready for st.download_button.
+
+    yoy_rows: optional [{"Year": 2023, "Mean NDVI": 0.300}, ...] from
+    gee_ndvi_utils.fetch_yoy_ndvi_rows — when present, a year-over-year
+    early-season NDVI chart is embedded after the stand assessment section.
+
+    cdl_rotation: optional rows from cdl_utils.get_cdl_rotation_rows — when
+    present, a "Recent Crop Rotation (USDA CDL)" table is inserted after the
+    field-setup metadata, plus a CDL provenance footer note.
     """
     if report_date is None:
         report_date = datetime.now().strftime("%B %d, %Y")
@@ -1342,6 +1399,57 @@ def generate_producer_report(
             small_style
         ))
     story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
+    # RECENT CROP ROTATION (USDA CDL) — after field-setup metadata
+    # -----------------------------------------------------------------------
+    if cdl_rotation:
+        story.append(Paragraph("Recent Crop Rotation (USDA CDL)", section_style))
+
+        rot_rows: List[List[Any]] = [["Year", "Label", "Dominant Class", "Confidence"]]
+        _rot_flagged = False
+        for r in cdl_rotation:
+            if r.get("boundary_warning"):
+                _rot_flagged = True
+            _conf = (
+                f"{r['dominant_pct']:.0f}% pixel share"
+                if r.get("dominant_pct") is not None else "—"
+            )
+            rot_rows.append([
+                str(r.get("year", "")),
+                Paragraph(r.get("label") or "—", body_style),
+                r.get("dominant_class") or "—",
+                _conf,
+            ])
+
+        rot_table = Table(
+            rot_rows,
+            colWidths=[0.7 * inch, 3.1 * inch, 1.7 * inch, 1.5 * inch],
+        )
+        rot_table.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0),  BLUE_ACCENT),
+            ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",       (0, 0), (-1, -1), 8.5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT_GRAY, colors.white]),
+            ("ALIGN",          (0, 0), (0, -1),  "CENTER"),
+            ("ALIGN",          (3, 0), (3, -1),  "CENTER"),
+            ("GRID",           (0, 0), (-1, -1), 0.3, MID_GRAY),
+            ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+            ("TOPPADDING",     (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+            ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(rot_table)
+        if _rot_flagged:
+            story.append(Paragraph(
+                "<i>⚠ Non-agricultural pixels exceed 10% of the field for at "
+                "least one year — verify the field boundary excludes roads, "
+                "waterways, and building sites.</i>",
+                ParagraphStyle("RotFlag", parent=small_style,
+                               textColor=colors.HexColor("#92400e")),
+            ))
+        story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
     # PAGE 1 — MAPS
@@ -1631,6 +1739,24 @@ def generate_producer_report(
     story.append(Spacer(1, 6))
 
     # -----------------------------------------------------------------------
+    # YEAR-OVER-YEAR EARLY-SEASON NDVI (report-only chart)
+    # -----------------------------------------------------------------------
+    if yoy_rows:
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=MID_GRAY, spaceAfter=4))
+        story.append(Paragraph(
+            "Year-over-Year Early-Season NDVI (March–April)", section_style))
+        yoy_png = generate_yoy_ndvi_chart_image(yoy_rows)
+        story.append(RLImage(io.BytesIO(yoy_png),
+                             width=5.5 * inch, height=2.4 * inch))
+        story.append(Paragraph(
+            "<i>Mean field NDVI for the March 1 – April 30 early-season window "
+            "of each year, Sentinel-2 via Google Earth Engine.</i>",
+            small_style,
+        ))
+        story.append(Spacer(1, 6))
+
+    # -----------------------------------------------------------------------
     # FIELD LEVEL RESULTS
     # -----------------------------------------------------------------------
     story.append(HRFlowable(width="100%", thickness=0.5,
@@ -1758,6 +1884,12 @@ def generate_producer_report(
         "This report is advisory only and does not constitute an official NRCS determination.",
         f"CoverMap Field Report · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
     ]
+    if cdl_rotation:
+        footer_lines.insert(-1, (
+            "Crop rotation derived from USDA NASS Cropland Data Layer (30 m "
+            "resolution). Corn/soybean accuracy in Iowa historically 95–98% "
+            "(NASS published accuracy assessments). Not CoverMap-validated."
+        ))
     for line in footer_lines:
         story.append(Paragraph(line, small_style))
 

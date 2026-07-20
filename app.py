@@ -31,13 +31,14 @@ from src.scoring import (
     RESIDUE_OPTIONS,
     _fcc_county_state,
 )
-from src.visualization import build_map_with_rasters, build_zone_risk_chart, LEGEND_ROWS_HTML
+from src.visualization import build_map_with_rasters, build_zone_risk_chart, build_yoy_ndvi_figure, LEGEND_ROWS_HTML
 from src.report_generator import (
     generate_field_report,
     generate_producer_report,
     generate_45z_verification_report,
 )
 from src.qc_utils import qc_signals
+from src.cdl_utils import get_cdl_rotation_rows
 from src.export_utils import export_risk_zones_shp
 from src.iowa_dem_utils import get_dem_with_fallback
 
@@ -59,6 +60,7 @@ try:
         init_gee_from_streamlit_secrets,
         fetch_ndvi_for_field as gee_fetch_ndvi,
         fetch_ndvi_streamlit,
+        fetch_yoy_ndvi_rows,
     )
     SENTINEL_AVAILABLE = True
 except Exception as _sentinel_exc:
@@ -311,34 +313,15 @@ if ndvi_mode == "Auto (Sentinel-2 API)":
             # Year-over-year comparison chart
             if yoy_compare:
                 with st.spinner("Pulling year-over-year NDVI via GEE (30-60s)..."):
-                    current_year = _dt.now().year
-                    yoy_rows = []
-                    for yr in range(2023, current_year + 1):
-                        try:
-                            arr, _, _, _ = gee_fetch_ndvi(
-                                field_boundary,
-                                date_from=_dt(yr, 3, 1),
-                                date_to=_dt(yr, 4, 30),
-                            )
-                            valid = arr[~np.isnan(arr)]
-                            if valid.size > 0:
-                                yoy_rows.append({"Year": yr, "Mean NDVI": round(float(valid.mean()), 3)})
-                        except Exception:
-                            pass
+                    yoy_rows = fetch_yoy_ndvi_rows(field_boundary)
+                    # Cache for the producer report so generating it doesn't
+                    # re-run the per-year GEE fetches. Keyed to the boundary
+                    # so a newly loaded field never reuses a stale cache.
+                    st.session_state.yoy_ndvi_rows = yoy_rows or None
+                    st.session_state.yoy_ndvi_bkey = str(
+                        [round(v, 6) for v in field_boundary.total_bounds])
                     if yoy_rows:
-                        yoy_df = pd.DataFrame(yoy_rows)
-                        fig_yoy = px.bar(
-                            yoy_df, x="Year", y="Mean NDVI",
-                            title="Early-Season NDVI Trend (March–April)",
-                            color="Mean NDVI",
-                            color_continuous_scale="RdYlGn",
-                            text="Mean NDVI",
-                        )
-                        fig_yoy.update_layout(
-                            plot_bgcolor="#0e1117",
-                            paper_bgcolor="#0e1117",
-                            font_color="#c9d1d9",
-                        )
+                        fig_yoy = build_yoy_ndvi_figure(yoy_rows)
                         st.subheader("📈 Year-over-Year NDVI Trend")
                         st.plotly_chart(fig_yoy, width='stretch')
 
@@ -1465,7 +1448,36 @@ with col_prod:
     if st.button("🌾 Producer Report", use_container_width=True):
         with st.spinner("Generating producer report..."):
             try:
-                pdf_bytes = generate_producer_report(**_pdf_kwargs)
+                # YoY early-season NDVI chart + CDL rotation table (both
+                # report-only). Reuse rows cached for this boundary if
+                # available; otherwise fetch now via the shared functions.
+                # Failures (e.g. GEE not configured in upload mode) just omit
+                # the corresponding report section.
+                _bkey = str([round(v, 6) for v in field_boundary.total_bounds])
+                _yoy_rows = (
+                    st.session_state.get("yoy_ndvi_rows")
+                    if st.session_state.get("yoy_ndvi_bkey") == _bkey else None
+                )
+                if not _yoy_rows and SENTINEL_AVAILABLE:
+                    try:
+                        _yoy_rows = fetch_yoy_ndvi_rows(field_boundary)
+                        st.session_state.yoy_ndvi_rows = _yoy_rows or None
+                        st.session_state.yoy_ndvi_bkey = _bkey
+                    except Exception:
+                        _yoy_rows = None
+                _cdl_rotation = (
+                    st.session_state.get("cdl_rotation_rows")
+                    if st.session_state.get("cdl_rotation_bkey") == _bkey else None
+                )
+                if not _cdl_rotation and SENTINEL_AVAILABLE:
+                    try:
+                        _cdl_rotation = get_cdl_rotation_rows(field_boundary)
+                        st.session_state.cdl_rotation_rows = _cdl_rotation or None
+                        st.session_state.cdl_rotation_bkey = _bkey
+                    except Exception:
+                        _cdl_rotation = None
+                pdf_bytes = generate_producer_report(
+                    **_pdf_kwargs, yoy_rows=_yoy_rows, cdl_rotation=_cdl_rotation)
                 st.download_button(
                     label="⬇️ Download Producer Report PDF",
                     data=pdf_bytes,

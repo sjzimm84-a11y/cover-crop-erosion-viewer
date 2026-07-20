@@ -7,6 +7,7 @@ import folium
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import rasterio
 from branca.element import MacroElement, Template
@@ -446,3 +447,31 @@ def build_zone_risk_chart(
         font_color="#c9d1d9",
     )
     return fig
+
+
+def build_yoy_ndvi_figure(yoy_rows: list):
+    """
+    Year-over-year early-season NDVI bar chart (Plotly figure).
+
+    Pure figure builder — no Streamlit calls, no I/O. Figure construction is
+    copied verbatim from the original inline app code so the chart the app
+    renders is unchanged; the producer report reuses the same rows for its
+    matplotlib PNG replica (kaleido is not a project dependency, so the
+    Plotly figure itself cannot be exported to PNG).
+
+    yoy_rows: [{"Year": 2023, "Mean NDVI": 0.300}, ...]
+    """
+    yoy_df = pd.DataFrame(yoy_rows)
+    fig_yoy = px.bar(
+        yoy_df, x="Year", y="Mean NDVI",
+        title="Early-Season NDVI Trend (March–April)",
+        color="Mean NDVI",
+        color_continuous_scale="RdYlGn",
+        text="Mean NDVI",
+    )
+    fig_yoy.update_layout(
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font_color="#c9d1d9",
+    )
+    return fig_yoy
