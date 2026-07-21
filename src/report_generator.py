@@ -1523,7 +1523,7 @@ def generate_producer_report(
 
     story.append(HRFlowable(width="100%", thickness=0.5,
                             color=MID_GRAY, spaceAfter=4))
-    story.append(Paragraph("CoverMap Advisory & Recommendation", section_style))
+    story.append(Paragraph("Field Summary", section_style))
 
     concern     = risk_result.get("concern_level", "N/A")
     concern_col = CONCERN_BADGE_COLOR.get(concern, TEXT_DARK)
@@ -1534,7 +1534,32 @@ def generate_producer_report(
     )
     story.append(Paragraph(f"Erosion Concern: {concern}", concern_badge_style))
 
-    rec_text = risk_result.get("recommendation", "No recommendation available.")
+    # Single-line observed-data readout replaces the former static
+    # recommendation paragraph. Every scalar is a value already reported
+    # elsewhere in this PDF — no methodology or scoring change. The colored
+    # concern band (rec_bg) below is retained, now carrying the readout.
+    _valid_px_rd = ndvi_array[~np.isnan(ndvi_array)]
+    _pct_above_020_rd = (
+        np.sum(_valid_px_rd > 0.20) / _valid_px_rd.size * 100
+        if _valid_px_rd.size > 0 else 0.0
+    )
+    _pct_low_cover_rd = 100.0 - _pct_above_020_rd
+    _zes_rd   = risk_result.get("zone_erosion_summary", [])
+    _saved_rd = [z["a_saved_zone"] * z["area_fraction"]
+                 for z in _zes_rd if z.get("a_saved_zone") is not None]
+    _base_rd  = [z["a_baseline_zone"] * z["area_fraction"]
+                 for z in _zes_rd if z.get("a_baseline_zone") is not None]
+    _reduction_rd = (
+        sum(_saved_rd) / sum(_base_rd) * 100
+        if (_base_rd and sum(_base_rd) and _saved_rd) else None
+    )
+    _reduction_str = f"{_reduction_rd:.1f}%" if _reduction_rd is not None else "n/a"
+    rec_text = (
+        f"NDVI {ndvi_stats.get('mean', 0.0):.3f} | "
+        f"Slope {slope_stats.get('mean', 0.0):.1f}% | "
+        f"{_pct_low_cover_rd:.0f}% of field NDVI &lt;0.20 | "
+        f"Est. reduction {_reduction_str}"
+    )
     rec_bg   = {
         "Low":      colors.HexColor("#dcfce7"),
         "Moderate": colors.HexColor("#fef9c3"),
@@ -1699,18 +1724,29 @@ def generate_producer_report(
         if ndvi_mean_val > 0.20 else
         f"⚠️ NDVI {ndvi_mean_val:.3f} — inadequate cover"
     )
-    ground_cover_status = (
-        "✅ Estimated adequate cover zones based on NDVI threshold — field verification recommended"
-        if pct_above_020 > 50 else
-        "⚠️ Estimated adequate cover zones below 50% of field — field verification recommended"
-    )
+    # Adequate cover extent — 4-tier readout on the (unchanged) pct_above_020
+    # calculation. Presentation/tiering only; no methodology change.
+    if pct_above_020 > 75:
+        ground_cover_status = f"{pct_above_020:.0f}% of field NDVI > 0.20 — Uniform cover"
+    elif pct_above_020 >= 50:
+        ground_cover_status = f"{pct_above_020:.0f}% of field NDVI > 0.20 — Adequate cover extent"
+    elif pct_above_020 >= 25:
+        ground_cover_status = (
+            f"{pct_above_020:.0f}% of field NDVI > 0.20 — Patchy cover, "
+            "field verification recommended"
+        )
+    else:
+        ground_cover_status = (
+            f"{pct_above_020:.0f}% of field NDVI > 0.20 — Sparse cover, "
+            "field verification recommended"
+        )
 
     prod_eqip_data = [
         ["Requirement", "Data Source", "Status"],
         ["Cover crop present", "Sentinel-2 NDVI > 0.20",  cover_status],
         ["Image date",         "GEE metadata",             image_date_str],
         ["Estimated biomass",  "NDVI proxy",               f"~{biomass_low}–{biomass_high} lb/acre (±40% NDVI proxy)"],
-        ["30% ground cover",   "NDVI threshold",           ground_cover_status],
+        ["Adequate cover extent", "NDVI > 0.20, % of field area", ground_cover_status],
     ]
 
     prod_eqip_col_w = [1.8 * inch, 1.8 * inch, 3.2 * inch]
@@ -1882,6 +1918,8 @@ def generate_producer_report(
         "C-Factor methodology: piecewise exponential NDVI model — "
         "continuous C-factor differentiated by residue system. "
         "This report is advisory only and does not constitute an official NRCS determination.",
+        "Biomass estimate is uncalibrated linear NDVI proxy — not validated "
+        "against on-field destructive sampling.",
         f"CoverMap Field Report · {cca_name} · Sentinel-2 via Google Earth Engine · Iowa RUSLE C-factor calibration · {report_date}",
     ]
     if yoy_rows:
