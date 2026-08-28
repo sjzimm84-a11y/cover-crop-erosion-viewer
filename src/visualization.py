@@ -135,7 +135,10 @@ def build_map_with_rasters(
     m = folium.Map(
         location=center,
         zoom_start=zoom_start,
-        tiles="CartoDB dark_matter",
+        # Esri legacy Dark Gray Canvas: free, keyless XYZ service. Swapped in
+        # after CARTO's "dark_matter" basemap began requiring an API key.
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ",
         prefer_canvas=True,
     )
 
