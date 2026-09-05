@@ -135,12 +135,25 @@ def build_map_with_rasters(
     m = folium.Map(
         location=center,
         zoom_start=zoom_start,
-        # Esri legacy Dark Gray Canvas: free, keyless XYZ service. Swapped in
-        # after CARTO's "dark_matter" basemap began requiring an API key.
+        tiles=None,  # base added explicitly below so we can cap its native zoom
+        prefer_canvas=True,
+        max_zoom=19,
+    )
+
+    # Esri legacy Dark Gray Canvas: free, keyless XYZ service (swapped in after
+    # CARTO's "dark_matter" basemap began requiring an API key). Over rural areas
+    # the service is only cached to zoom 16; requesting a closer tile returns a
+    # "Map data not yet available" placeholder. Cap max_native_zoom at 16 so
+    # Leaflet upscales the z16 tiles past that point instead — the NDVI/slope
+    # overlays stay full-resolution, and the dark backdrop just softens slightly.
+    folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
         attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ",
-        prefer_canvas=True,
-    )
+        name="Esri Dark Gray Canvas",
+        max_native_zoom=16,
+        max_zoom=19,
+        control=False,
+    ).add_to(m)
 
     GeoJson(
         boundary_ll.__geo_interface__,
