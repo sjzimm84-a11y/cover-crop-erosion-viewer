@@ -354,6 +354,7 @@ def generate_field_report(
     # Dates
     ndvi_date_from: Optional[str] = None,
     ndvi_date_to: Optional[str] = None,
+    scoring_window_source: Optional[str] = None,
     ndvi_scene_date: Optional[str] = None,
     report_date: Optional[str] = None,
     dem_source: str = "Iowa 3-meter Digital Elevation Model (Iowa DNR)",
@@ -461,6 +462,8 @@ def generate_field_report(
         ndvi_date_str = f"NDVI: {ndvi_date_from} – {ndvi_date_to}"
     elif ndvi_date_to:
         ndvi_date_str = f"NDVI collected: {ndvi_date_to}"
+    if scoring_window_source and ndvi_date_str:
+        ndvi_date_str += f" | scoring window: {scoring_window_source}"
 
     _soil_display = "Not available"
     if soil_series and soil_series not in ("Not available", "Unknown"):
@@ -1235,6 +1238,7 @@ def generate_producer_report(
     # Dates
     ndvi_date_from: Optional[str] = None,
     ndvi_date_to: Optional[str] = None,
+    scoring_window_source: Optional[str] = None,
     ndvi_scene_date: Optional[str] = None,
     report_date: Optional[str] = None,
     dem_source: str = "Iowa 3-meter Digital Elevation Model (Iowa DNR)",
@@ -1352,6 +1356,8 @@ def generate_producer_report(
         ndvi_date_str = f"NDVI: {ndvi_date_from} – {ndvi_date_to}"
     elif ndvi_date_to:
         ndvi_date_str = f"NDVI collected: {ndvi_date_to}"
+    if scoring_window_source and ndvi_date_str:
+        ndvi_date_str += f" | scoring window: {scoring_window_source}"
 
     _soil_display = "Not available"
     if soil_series and soil_series not in ("Not available", "Unknown"):
@@ -2122,6 +2128,7 @@ def generate_45z_verification_report(
     # Dates
     ndvi_date_from: Optional[str] = None,
     ndvi_date_to: Optional[str] = None,
+    scoring_window_source: Optional[str] = None,
     ndvi_scene_date: Optional[str] = None,
     report_date: Optional[str] = None,
     dem_source: str = "Iowa 3-meter Digital Elevation Model (Iowa DNR)",
@@ -2385,7 +2392,7 @@ def generate_45z_verification_report(
     evidence_rows = [
         ["Element", "Value", "Source"],
         ["Compositing method", "Pixel-wise temporal median", "Tech Guide §2.1"],
-        ["Compositing window", _window_range, "User-defined spring window"],
+        ["Compositing window", _window_range, scoring_window_source or "User-defined spring window"],
         ["Scenes composited", str(scene_count) if scene_count else "—", "GEE metadata"],
         ["Scene date range", _scene_range, "GEE metadata"],
         ["Cloud filter — scene", "<80% cloud cover", "Two-stage filter"],

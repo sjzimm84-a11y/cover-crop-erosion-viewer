@@ -116,6 +116,54 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
+# NDVI scoring-window resolution
+# ---------------------------------------------------------------------------
+def resolve_scoring_window(termination_date, ndvi_window,
+                           ndvi_year, ndvi_start, ndvi_end, now=None):
+    """Resolve the NDVI scoring window (date_from, date_to, source_label).
+
+    Glass-box: the returned source_label states where the window came from so a
+    report never shows a window without its provenance.
+
+    * termination_date set (datetime.date) -> the 20 days ending on it
+      (termination - 20 through termination). This is the producer-driven case.
+    * termination_date None -> the EXISTING ndvi_window logic, unchanged:
+        - "Custom spring window" -> ndvi_start..ndvi_end of ndvi_year
+          (the app default is 04-05..04-20, i.e. today's behavior)
+        - "Last N days" -> a rolling window ending now
+    With termination_date None the returned dates are bit-for-bit identical to
+    the pre-feature inline logic, so a blank-date run is a no-op vs. current
+    scoring output.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    if now is None:
+        now = _dt.now()
+
+    if termination_date is not None:
+        date_to   = _dt(termination_date.year, termination_date.month, termination_date.day)
+        date_from = date_to - _td(days=20)
+        source = (f"20-day pre-termination window from producer-entered "
+                  f"termination date ({date_to:%b %d, %Y})")
+        return date_from, date_to, source
+
+    if ndvi_window == "Custom spring window":
+        date_from = _dt(ndvi_year, int(ndvi_start.split('-')[0]), int(ndvi_start.split('-')[1]))
+        date_to   = _dt(ndvi_year, int(ndvi_end.split('-')[0]),   int(ndvi_end.split('-')[1]))
+        if (ndvi_start, ndvi_end) == ("04-05", "04-20"):
+            source = "default Apr 5 – Apr 20 spring window (no termination date entered)"
+        else:
+            source = f"custom spring window {ndvi_start} – {ndvi_end} (no termination date entered)"
+        return date_from, date_to, source
+
+    days_map  = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
+    days_back = days_map.get(ndvi_window, 7)
+    date_to   = now
+    date_from = date_to - _td(days=days_back)
+    source = f"rolling last {days_back} days (no termination date entered)"
+    return date_from, date_to, source
+
+
+# ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 col_logo, col_title = st.columns([1, 8])
@@ -151,6 +199,17 @@ with st.sidebar:
         ),
     )
 
+    termination_date = st.date_input(
+        "Cover crop termination date (optional)",
+        value=None,
+        format="YYYY-MM-DD",
+        help=(
+            "Optional. When set, the NDVI scoring window becomes the 20 days "
+            "ending on this date (termination − 20 through termination). "
+            "Leave blank to use the default Apr 5 – Apr 20 window."
+        ),
+    )
+
     boundary_file = st.file_uploader(
         "Upload field boundary",
         type=["geojson", "json", "zip", "kml"],
@@ -182,6 +241,25 @@ with st.sidebar:
             ndvi_year  = None
             ndvi_start = None
             ndvi_end   = None
+
+        # Live readout of the NDVI window scoring will actually use, so the
+        # user sees the effective dates (and a termination-date override)
+        # BEFORE running any report.
+        try:
+            _pv_from, _pv_to, _pv_src = resolve_scoring_window(
+                termination_date=termination_date,
+                ndvi_window=ndvi_window,
+                ndvi_year=ndvi_year,
+                ndvi_start=ndvi_start,
+                ndvi_end=ndvi_end,
+            )
+            st.info(
+                f"🛰️ **NDVI window to be used:** "
+                f"{_pv_from:%b %d, %Y} – {_pv_to:%b %d, %Y}  \n"
+                f"Source: {_pv_src}"
+            )
+        except Exception:
+            st.warning("Enter a valid Start/End as MM-DD to preview the NDVI window.")
 
         # Year-over-year comparison
         yoy_compare = st.checkbox("📈 Year-over-year comparison (2023–present)")
@@ -268,19 +346,19 @@ if ndvi_mode == "Auto (Sentinel-2 API)":
         st.stop()
     else:
         try:
-            from datetime import datetime as _dt, timedelta as _td
-
             # Initialize GEE authentication
             init_gee_from_streamlit_secrets()
 
-            if ndvi_window == "Custom spring window":
-                date_from = _dt(ndvi_year, int(ndvi_start.split('-')[0]), int(ndvi_start.split('-')[1]))
-                date_to   = _dt(ndvi_year, int(ndvi_end.split('-')[0]),   int(ndvi_end.split('-')[1]))
-            else:
-                days_map  = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30}
-                days_back = days_map.get(ndvi_window, 7)
-                date_to   = _dt.now()
-                date_from = date_to - _td(days=days_back)
+            # Termination date (when set) drives a 20-day pre-termination window;
+            # otherwise the existing ndvi_window logic is used unchanged.
+            date_from, date_to, _window_source = resolve_scoring_window(
+                termination_date=termination_date,
+                ndvi_window=ndvi_window,
+                ndvi_year=ndvi_year,
+                ndvi_start=ndvi_start,
+                ndvi_end=ndvi_end,
+            )
+            st.session_state.ndvi_window_source = _window_source
 
             ndvi_array, ndvi_transform, ndvi_profile, ndvi_msg, scene_meta, ndvi_warning = fetch_ndvi_streamlit(
                 boundary_gdf=field_boundary,
@@ -502,6 +580,8 @@ if "ndvi_date_from" not in st.session_state:
     st.session_state.ndvi_date_from = None
 if "ndvi_date_to" not in st.session_state:
     st.session_state.ndvi_date_to = None
+if "ndvi_window_source" not in st.session_state:
+    st.session_state.ndvi_window_source = None
 if "ndvi_scene_latest" not in st.session_state:
     st.session_state.ndvi_scene_latest = None
 if "ndvi_scene_earliest" not in st.session_state:
@@ -1403,10 +1483,7 @@ with col_c:
         placeholder="e.g. Goodhue County, MN",
     )
 
-col_d, col_e, col_f = st.columns(3)
-with col_d:
-    pdf_termination_date = st.text_input(
-        "Termination date (optional)", value="", placeholder="e.g. May 10, 2026")
+col_e, col_f = st.columns(2)
 with col_e:
     pdf_cca_name = st.text_input("CCA name", value="Stephen Zimmerman, CCA MS")
 with col_f:
@@ -1440,9 +1517,10 @@ _pdf_kwargs = dict(
     slope_threshold=slope_threshold,
     ndvi_date_from=st.session_state.ndvi_date_from,
     ndvi_date_to=st.session_state.ndvi_date_to,
+    scoring_window_source=st.session_state.get("ndvi_window_source"),
     ndvi_scene_date=_image_date_str,
     dem_source=st.session_state.get("dem_source_label", "Iowa 3-meter Digital Elevation Model (Iowa DNR)"),
-    termination_date=pdf_termination_date or None,
+    termination_date=(termination_date.strftime("%B %d, %Y") if termination_date else None),
     cca_name=pdf_cca_name or "Stephen Zimmerman, CCA MS",
     previous_crop=pdf_previous_crop or None,
     soil_series=st.session_state.get("soil_series"),
