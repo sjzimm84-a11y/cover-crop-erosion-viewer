@@ -48,23 +48,6 @@ DEFAULT_THRESHOLDS = {
     "slope_steep":  9.0,
 }
 
-# ---------------------------------------------------------------------------
-# Iowa cover crop RUSLE C-factor lookup table
-# Keyed by NDVI range midpoint → C-factor value
-# Source: NRCS Iowa Technical Note + ISU Extension PM-1209
-# ---------------------------------------------------------------------------
-IOWA_C_FACTOR_TABLE = {
-    # (ndvi_min, ndvi_max): c_factor
-    # Calibrated to cereal rye biomass per national database (mean 3,428 kg/ha)
-    # and NRCS Practice Code 340 minimum (~1,500 kg/ha at NDVI ~0.25)
-    (0.00, 0.15): 0.90,   # Failed stand — essentially bare soil
-    (0.15, 0.20): 0.75,   # Inadequate — <1,000 kg/ha biomass
-    (0.20, 0.35): 0.45,   # Marginal — 1,000–2,500 kg/ha, NRCS 340 borderline
-    (0.35, 0.50): 0.20,   # Adequate — >2,500 kg/ha, meets NRCS minimum
-    (0.50, 0.65): 0.08,   # Good stand
-    (0.65, 1.00): 0.03,   # Excellent — near canopy saturation
-}
-
 # Slope-based LS-factor adjustment (simplified for field advisory use)
 # Steeper slopes amplify erosion risk multiplicatively
 LS_FACTOR_TABLE = {
@@ -400,15 +383,6 @@ def _continuous_c_array(ndvi_array: np.ndarray, residue_system: str) -> np.ndarr
     )
 
 
-# DEPRECATED — superseded by _continuous_c_factor(). Retained for compare_methods.py.
-def _lookup_c_factor(ndvi_mean: float) -> float:
-    """Map mean NDVI to RUSLE C-factor using Iowa lookup table."""
-    for (ndvi_min, ndvi_max), c_factor in IOWA_C_FACTOR_TABLE.items():
-        if ndvi_min <= ndvi_mean < ndvi_max:
-            return c_factor
-    return 0.95  # fallback — treat as bare soil if out of range
-
-
 def _lookup_ls_factor(slope_mean: float) -> float:
     """Map mean slope % to LS-factor via continuous analytical formula."""
     return float(_analytical_ls_factor(slope_mean))
@@ -451,7 +425,6 @@ def pixel_risk_index(
     Returns array of same shape as inputs. NaN propagates from either input.
     C-factor from continuous exponential model (_continuous_c_array).
     LS-factor from McCool et al. 1987 analytical formula (_analytical_ls_factor).
-    Old bin-based implementation preserved in pixel_level_concern() for compare_methods.py.
     """
     c_array  = _continuous_c_array(ndvi_array, residue_system)
     ls_array = _analytical_ls_factor(slope_array)
@@ -666,7 +639,7 @@ def score_erosion_concern(
         c_factor             : C-factor from continuous exponential model
         c_factor_baseline    : C at NDVI=0 for this residue system (the intercept)
         c_factor_method      : "exponential_v2"
-        residue_multiplier   : legacy multiplier (retained for compare_methods.py reference)
+        residue_multiplier   : legacy multiplier (retained for historical reference)
         residue_system       : str label selected
         ls_factor            : mean-based LS-factor
         rusle_score          : adjusted C × LS
@@ -683,7 +656,7 @@ def score_erosion_concern(
     ndvi_mean  = ndvi_stats["mean"]
     slope_mean = slope_stats["mean"]
 
-    residue_multiplier = RESIDUE_ADJUSTMENTS.get(residue_system, 1.00)  # retained for compare_methods.py reference
+    residue_multiplier = RESIDUE_ADJUSTMENTS.get(residue_system, 1.00)  # retained for historical reference
     c_factor_adjusted  = _continuous_c_factor(ndvi_mean, residue_system)
     c_factor_baseline  = _continuous_c_factor(0.0,       residue_system)  # C at NDVI=0 = intercept
 
@@ -814,7 +787,7 @@ def score_erosion_concern(
         "c_factor":             round(c_factor_adjusted, 3),
         "c_factor_baseline":    round(c_factor_baseline, 3),
         "c_factor_method":      "exponential_v2",
-        "residue_multiplier":   residue_multiplier,   # retained for compare_methods.py reference
+        "residue_multiplier":   residue_multiplier,   # retained for historical reference
         "residue_system":       residue_system,
         "ls_factor":            round(ls_factor, 2),
         "rusle_score":          round(rusle_score, 3),
@@ -831,26 +804,3 @@ def score_erosion_concern(
         "slope_threshold":      slope_threshold,
         "recommendation":       recommendations.get(concern, ""),
     }
-
-
-# DEPRECATED — dead code (not called in current app). Superseded by pixel_risk_index().
-# Retained for compare_methods.py reference.
-def pixel_level_concern(
-    ndvi_array: np.ndarray,
-    slope_array: np.ndarray,
-) -> np.ndarray:
-    """
-    Apply RUSLE C×LS scoring at every pixel for map visualization.
-    Returns a float array of rusle_score values (same shape as inputs).
-    """
-    c_array = np.full(ndvi_array.shape, np.nan, dtype=float)
-    c_array = np.where(ndvi_array < 0.15,                                    0.90, c_array)
-    c_array = np.where((ndvi_array >= 0.15) & (ndvi_array < 0.20),           0.75, c_array)
-    c_array = np.where((ndvi_array >= 0.20) & (ndvi_array < 0.35),           0.45, c_array)
-    c_array = np.where((ndvi_array >= 0.35) & (ndvi_array < 0.50),           0.20, c_array)
-    c_array = np.where((ndvi_array >= 0.50) & (ndvi_array < 0.65),           0.08, c_array)
-    c_array = np.where(ndvi_array >= 0.65,                                    0.03, c_array)
-    ls_array = _analytical_ls_factor(slope_array)
-    rusle = c_array * ls_array
-    rusle = np.where(np.isnan(ndvi_array) | np.isnan(slope_array), np.nan, rusle)
-    return rusle

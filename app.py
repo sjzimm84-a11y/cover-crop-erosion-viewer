@@ -24,7 +24,6 @@ from src.raster_utils import (
 from src.scoring import (
     DEFAULT_THRESHOLDS,
     score_erosion_concern,
-    pixel_level_concern,
     pixel_risk_index,
     classify_risk_zones,
     compute_ndvi_zone_summary,
