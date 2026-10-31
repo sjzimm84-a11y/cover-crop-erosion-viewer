@@ -482,7 +482,7 @@ footer {
       <h3 style="margin-bottom:.6em">The Problem It Solves</h3>
       <ul style="padding-left:1.2em; line-height:2.1">
         <li>Producers can measure seed cost to the dollar. They cannot measure erosion reduction to the acre</li>
-        <li>A RUSLE2 run gives one number for a field — CoverMap tells you which 40 acres of that 200-acre field are generating 80% of the loss</li>
+        <li>A RUSLE2 run gives one number for a field — CoverMap shows which acres of that field carry the highest erosion risk, and whether the cover crop is standing on them</li>
         <li>Cover crop value is argued, not demonstrated — CoverMap produces the demonstration</li>
       </ul>
     </div>
@@ -563,8 +563,8 @@ Dense canopy:         0.50 – 0.80+</span>
     </div>
     <div>
       <h3>Imagery Acquisition</h3>
-      <p>CoverMap queries Google Earth Engine for all Sentinel-2 L2A scenes intersecting the field boundary within a user-defined spring window (default March 15 – May 15). The Sentinel-2 constellation revisits Iowa approximately every 5 days under clear conditions.</p>
-      <p><strong>Cloud masking:</strong> The ESA Scene Classification Layer (SCL) is applied at the pixel level to remove cloud, cloud shadow, and saturated pixels before compositing. Scenes with fewer than 50% valid pixels trigger a reliability warning; fewer than 75% valid pixels trigger a quality advisory.</p>
+      <p>CoverMap queries Google Earth Engine for all Sentinel-2 L2A scenes intersecting the field boundary within a scoring window: the 20 days ending on the producer-entered termination date, or a default spring window of April 5 – April 20 when no date is entered (custom and rolling 7/14/30-day windows are also available). The Sentinel-2 constellation revisits Iowa every 3–5 days.</p>
+      <p><strong>Cloud masking:</strong> Two stages. Scenes with ≥80% scene-wide cloud are dropped (the threshold is relaxed only if no scenes remain). Then the ESA Scene Classification Layer (SCL) is checked inside the field boundary — scenes with ≥30% cloud, cloud shadow, cirrus or snow over the field are excluded. After compositing, if fewer than 75% of field pixels are valid a yellow quality warning is shown; below 50% the result is flagged red as unreliable.</p>
       <p><strong>Temporal composite:</strong> Valid pixels across all scenes in the window are summarized as a temporal median — reducing noise from single-date anomalies and partial cloud cover. The composite represents integrated canopy conditions across the observation window, not a single snapshot.</p>
       <div class="limitation">
         <strong>Known limitation:</strong> NDVI saturates above approximately 3,500 kg/ha dry biomass (~3,100 lb/acre — the national cereal rye database mean). CoverMap cannot differentiate between a good and an excellent stand above this threshold. Additionally, an NDVI reading of 0.25 in late March (dormant rye) reflects different biomass than the same reading in early May (active growth). No growing degree day adjustment is currently applied.
@@ -574,14 +574,14 @@ Dense canopy:         0.50 – 0.80+</span>
 
   <h3 style="margin-top:1.5em; margin-bottom:.8em">NDVI Cover Quality Zone Classification</h3>
   <table>
-    <thead><tr><th>NDVI Range</th><th>Zone</th><th>Biomass Estimate (cereal rye)</th><th>NRCS Practice 340 Context</th></tr></thead>
+    <thead><tr><th>NDVI Range</th><th>Zone</th><th>Biomass Estimate (cereal rye)</th><th>Agronomic Meaning</th></tr></thead>
     <tbody>
-      <tr><td>&lt; 0.20</td><td><span style="color:var(--c-crit);font-weight:600">Low Cover</span></td><td>&lt; 900 lb/acre</td><td>Below minimum stand threshold; inadequate erosion protection</td></tr>
-      <tr><td>0.20 – 0.35</td><td><span style="color:var(--c-mod);font-weight:600">Marginal</span></td><td>900 – 2,200 lb/acre</td><td>Borderline; may meet minimum on favorable soils; field verification recommended</td></tr>
-      <tr><td>&gt; 0.35</td><td><span style="color:var(--c-low);font-weight:600">Good Cover</span></td><td>&gt; 2,200 lb/acre</td><td>Exceeds NRCS 340 stand requirement; effective erosion control likely</td></tr>
+      <tr><td>&lt; 0.20</td><td><span style="color:var(--c-crit);font-weight:600">Low Cover</span></td><td>&lt; 900 lb/acre</td><td>Below erosion protection threshold</td></tr>
+      <tr><td>0.20 – 0.35</td><td><span style="color:var(--c-mod);font-weight:600">Marginal</span></td><td>900 – 2,200 lb/acre</td><td>Partial protection, variable coverage; field verification recommended</td></tr>
+      <tr><td>&gt; 0.35</td><td><span style="color:var(--c-low);font-weight:600">Good Cover</span></td><td>&gt; 2,200 lb/acre</td><td>Adequate for Iowa spring conditions</td></tr>
     </tbody>
   </table>
-  <p style="font-size:.83rem; color:var(--muted)">Biomass estimates derived from Huddell et al. (2024) national cereal rye NDVI-biomass database (n = 5,695 field observations, mean 3,428 kg/ha). Uncertainty ±40% at the field scale.</p>
+  <p style="font-size:.83rem; color:var(--muted)">Biomass estimates derived from the Huddell et al. (2024) U.S. cereal rye growth database. Uncertainty ±40% at the field scale.</p>
 </div>
 </section>
 
@@ -643,7 +643,7 @@ Dense canopy:         0.50 – 0.80+</span>
 <span class="hl">C(NDVI) = floor + (intercept − floor) × exp(−k × (NDVI − 0.185))</span>   <span class="comment">where NDVI &gt; 0.185</span>
 
 <span class="comment">Parameters by residue system:</span>
-  intercept  =  C at NDVI = 0  (residue protection only, no cover crop)
+  intercept  =  C at NDVI ≤ 0.185  (residue protection only, no cover crop)
   floor      =  C asymptote at high NDVI  (maximum cover crop benefit)
   k          =  decay constant  (higher = faster benefit per unit NDVI)
   </div>
@@ -661,7 +661,7 @@ Dense canopy:         0.50 – 0.80+</span>
           <tr><td>Unknown (conservative default)</td><td>0.45</td><td>0.100</td><td>5</td></tr>
         </tbody>
       </table>
-      <p style="font-size:.82rem;color:var(--muted)">Parameters are initial estimates based on published RUSLE2 value ranges.</p>
+      <p style="font-size:.82rem;color:var(--muted)">Pre-calibration estimates based on published RUSLE value ranges. Direct RUSLE2 benchmarking (Shelby County, 2026) indicates the intercepts run high — back-solved RUSLE2 C for no-till corn ≈ 0.018 vs. 0.05 here. Intercept and floor are being re-derived together; that rescaling changes absolute soil loss but not % reduction.</p>
 
       <h3 style="margin-top:1.2em">Reading the Parameters</h3>
       <p><strong>Intercept</strong> is the C-factor for a field with that tillage system and zero living cover crop. No-till corn at intercept = 0.05 reflects that 80% corn stover coverage achieves substantial erosion protection independent of cover crop establishment — a well-documented field observation. Conventional tillage at 0.45 reflects near bare-soil conditions with minimal residue, consistent with NRCS RUSLE2 guidance.</p>
@@ -711,7 +711,7 @@ L = (100 / 22.13) ^ m
 <span class="hl">LS = L × S</span>  <span class="comment">(computed at every 10 m pixel)</span>
       </div>
       <div class="limitation">
-        <strong>Slope length assumption:</strong> True RUSLE2 LS requires horizontal distance from flow origin to concentration point — a flow-accumulation computation. CoverMap uses a fixed 100 m slope length for all pixels, consistent with typical Iowa row-crop slope segment geometry. This introduces conservatism on long uniform slopes (&gt;200 m) and may underestimate LS on short steep concentrated-flow segments. Appropriate for field advisory use; not a substitute for formal NRCS RUSLE2 analysis.
+        <strong>Slope length assumption:</strong> True RUSLE2 LS requires horizontal distance from flow origin to concentration point — a flow-accumulation computation. CoverMap uses a fixed 100 m slope length for all pixels, consistent with typical Iowa row-crop slope segment geometry. This underestimates LS on long uniform slopes (&gt;100 m) and overestimates it on short slopes. RUSLE2 benchmarking also showed the slope-length exponent is management-dependent (m ≈ 0.24 under no-till vs. ≈ 0.54 under conventional tillage at slopes ≥5%); CoverMap's m = 0.5 for slopes ≥5% (0.2–0.4 on flatter ground) is about right for conventional tillage but overstates L on high-residue no-till. A residue-keyed m is planned. Appropriate for field advisory use; not a substitute for formal NRCS RUSLE2 analysis.
       </div>
     </div>
     <div>
@@ -719,18 +719,18 @@ L = (100 / 22.13) ^ m
       <table>
         <thead><tr><th>Slope (%)</th><th>LS-Factor</th><th>Risk Amplification vs. 4%</th></tr></thead>
         <tbody>
-          <tr><td>1</td><td>0.14</td><td>0.14×</td></tr>
-          <tr><td>2</td><td>0.28</td><td>0.28×</td></tr>
-          <tr><td>4</td><td>0.73</td><td>1.0× (reference)</td></tr>
-          <tr><td>6</td><td>1.21</td><td>1.7×</td></tr>
-          <tr><td>9</td><td>2.06</td><td>2.8×</td></tr>
-          <tr><td>12</td><td>2.91</td><td>4.0×</td></tr>
-          <tr><td>15</td><td>3.75</td><td>5.1×</td></tr>
-          <tr><td>18</td><td>4.59</td><td>6.3×</td></tr>
+          <tr><td>1</td><td>0.22</td><td>0.26×</td></tr>
+          <tr><td>2</td><td>0.39</td><td>0.46×</td></tr>
+          <tr><td>4</td><td>0.84</td><td>1.0× (reference)</td></tr>
+          <tr><td>6</td><td>1.44</td><td>1.7×</td></tr>
+          <tr><td>9</td><td>2.14</td><td>2.5×</td></tr>
+          <tr><td>12</td><td>3.19</td><td>3.8×</td></tr>
+          <tr><td>15</td><td>4.23</td><td>5.0×</td></tr>
+          <tr><td>18</td><td>5.26</td><td>6.2×</td></tr>
         </tbody>
       </table>
       <div class="callout" style="margin-top:1em">
-        <strong>Why per-pixel LS matters:</strong> A field with mean slope of 8% and a 16% backslope generates LS-factors of 1.8 and 4.3 respectively. Applying the mean slope to the whole field understates backslope risk by more than 2×. CoverMap computes LS independently at every 10 m pixel using the Iowa DNR 3 m LiDAR-derived DEM, then resamples to match the Sentinel-2 NDVI grid before multiplying with C-factor.
+        <strong>Why per-pixel LS matters:</strong> A field with mean slope of 8% and a 16% backslope generates LS-factors of 1.9 and 4.6 respectively. Applying the mean slope to the whole field understates backslope risk by about 2.4×. CoverMap computes LS independently at every 10 m pixel using the Iowa DNR 3 m LiDAR-derived DEM, then resamples to match the Sentinel-2 NDVI grid before multiplying with C-factor.
       </div>
     </div>
   </div>
@@ -755,7 +755,7 @@ Higher values = higher erosion potential from the combination of poor cover and 
     <div class="zone-card low">
       <div class="z-label">Low Risk</div>
       <div class="z-range">Risk Index &lt; 0.3</div>
-      <div class="z-desc">Cover crop providing effective protection. Erosion rate well below tolerable loss for most Iowa soil types under normal spring rainfall.</div>
+      <div class="z-desc">Cover adequate for slope conditions. Canopy development appears sufficient to reduce erosion risk based on NDVI analysis.</div>
     </div>
     <div class="zone-card moderate">
       <div class="z-label">Moderate Risk</div>
@@ -765,17 +765,17 @@ Higher values = higher erosion potential from the combination of poor cover and 
     <div class="zone-card high">
       <div class="z-label">High Risk</div>
       <div class="z-range">0.7 – 1.5</div>
-      <div class="z-desc">Insufficient cover for slope conditions. These pixels are generating measurable soil loss above tolerable rates. Cover crop termination should be delayed if possible.</div>
+      <div class="z-desc">Marginal cover on steeper terrain. Erosion protection is likely insufficient on these slope units. Consider delaying termination where feasible.</div>
     </div>
     <div class="zone-card critical">
       <div class="z-label">Critical Risk</div>
       <div class="z-range">Risk Index &gt; 1.5</div>
-      <div class="z-desc">Severe erosion potential. Combination of poor cover and steep slope generates risk comparable to bare conventional tillage on moderate terrain. Immediate agronomic attention warranted.</div>
+      <div class="z-desc">Low cover on high-risk slope units. Stand density appears below effective erosion protection thresholds for this terrain. Priority area for field verification and management review.</div>
     </div>
   </div>
 
   <div class="callout">
-    <strong>Field-average vs. per-pixel — why the distinction matters:</strong> A 48-acre Shelby County field with mean NDVI 0.25 and mean slope 8% might appear Moderate overall. But within that same field, the 16-acre backslope unit at NDVI 0.15 and slope 14% generates Critical-level Risk Index values — and that backslope is where Iowa loses the most topsoil per unit area per rain event. CoverMap's per-pixel approach surfaces that spatial heterogeneity rather than averaging it away.
+    <strong>Field-average vs. per-pixel — why the distinction matters:</strong> A 48-acre Shelby County field with mean NDVI 0.25 and mean slope 8% might appear Moderate overall. But within that same field, a 16-acre backslope unit at NDVI 0.15 and 14% slope under conventional tillage scores Critical (C 0.45 × LS 3.9 ≈ 1.75) — and that backslope is where Iowa loses the most topsoil per unit area per rain event. CoverMap's per-pixel approach surfaces that spatial heterogeneity rather than averaging it away.
   </div>
 </div>
 </section>
@@ -906,10 +906,11 @@ P  =    1.0                      <span class="comment">no support practice facto
           <tr><td>Slope length</td><td>Flow accumulation</td><td>100 m assumed</td></tr>
           <tr><td>C-factor</td><td>Daily through crop stages</td><td>Single NDVI composite</td></tr>
           <tr><td>LS precision</td><td>High (GIS-derived)</td><td>Moderate (fixed L)</td></tr>
-          <tr><td>Typical result</td><td>Higher (critical area)</td><td>Lower (field average)</td></tr>
+          <tr><td>Whole-field result</td><td>Higher (critical area)</td><td>Lower (field average)</td></tr>
+          <tr><td>Matched slope &amp; soil</td><td>Lower</td><td>2.6–3.9× higher (pre-calibration C)</td></tr>
         </tbody>
       </table>
-      <p style="font-size:.82rem; color:var(--muted); margin-top:.6em">CoverMap estimates will almost always be lower than RUSLE2 for the same field. RUSLE2 focuses on the dominant critical slope area; CoverMap averages across the entire field including flat toeslopes. Both are correct for what they measure. CoverMap reports include this disclaimer explicitly.</p>
+      <p style="font-size:.82rem; color:var(--muted); margin-top:.6em">Whole-field CoverMap estimates usually run lower than RUSLE2 because RUSLE2 evaluates the dominant critical slope area while CoverMap averages the entire field, including flat toeslopes. On a matched slope segment and soil, the reverse holds: three paired RUSLE2 v2.7.1 runs in Shelby County (Monona and Ida, 12–22% slope) put CoverMap 2.6–3.9× higher. K matched exactly; the gap traces mainly to the pre-calibration C intercepts and secondarily to the slope-length exponent. % erosion reduction is the least affected output and the most defensible number for producers. One more caveat: on high-residue no-till, drilling a cover crop can disturb residue enough that RUSLE2 shows a net increase in erosion — CoverMap sees the green cover, not the establishment pass. Treat CoverMap as an advisory tool, not a substitute for NRCS RUSLE2.</p>
     </div>
   </div>
 </div>
@@ -924,12 +925,12 @@ P  =    1.0                      <span class="comment">no support practice facto
     <li>Laflen, J.M. &amp; Roose, E.J. (1998). Methodologies for assessment of soil degradation due to water erosion. <em>Soil Degradation in the United States</em>, CRC Press. <em>RUSLE C-factor value ranges for soil degradation assessment; general methodology reference.</em></li>
     <li>McCool, D.K., Brown, L.C., Foster, G.R., Mutchler, C.K., &amp; Meyer, L.D. (1987). Revised slope steepness factor for the Universal Soil Loss Equation. <em>Transactions of the ASAE</em>, 30(5), 1387–1396. <em>Source of S-factor piecewise formula used in LS computation.</em></li>
     <li>Renard, K.G., Foster, G.R., Weesies, G.A., McCool, D.K., &amp; Yoder, D.C. (1997). <em>Predicting Soil Erosion by Water: A Guide to Conservation Planning with the Revised Universal Soil Loss Equation.</em> USDA Agriculture Handbook 703.</li>
-    <li>Huddell, A.M., et al. (2024). National synthesis of cereal rye cover crop biomass and performance. <em>Nature Sustainability</em>. n = 5,695 field observations, mean 3,428 kg/ha. <em>Basis for NDVI–biomass estimates.</em></li>
+    <li>Huddell, A.M., et al. (2024). U.S. cereal rye winter cover crop growth database. <em>Scientific Data</em>, 11, 200. doi:10.1038/s41597-024-02996-9. <em>Basis for NDVI–biomass estimates.</em></li>
     <li>NOAA Office for Coastal Management. <em>R-Factor for the Conterminous United States</em> (gridded rainfall erosivity, AH703 methodology of Renard et al. 1997). NOAA Digital Coast. <em>Source for the per-field R-factor, sampled from the bundled Midwest clip of this raster.</em></li>
     <li>USDA NRCS. (2023). <em>Conservation Practice Standard 340 — Cover Crop</em>. Iowa Supplement. <em>Stand documentation and minimum biomass requirements referenced throughout.</em></li>
-    <li>ISU Extension. (2021). <em>PM-1209 — Cover Crop Management in Iowa</em>. Iowa State University Extension and Outreach. <em>Iowa cover crop species and management guide.</em></li>
+    <li>Iowa State University Extension and Outreach. <em>Cover Crops</em>. Integrated Crop Management, crops.extension.iastate.edu/crops/cover-crops. <em>Iowa cover crop species and management guidance.</em></li>
     <li>European Space Agency. (2022). <em>Sentinel-2 Level-2A Product Definition</em>. ESA-EOPG-CSCOP-TN-0002. <em>Spectral band definitions, atmospheric correction, SCL cloud masking.</em></li>
-    <li>Dittmer, W. (2026, in progress). <em>CoverMap C-Factor Calibration Against RUSLE2 Iowa State File — Monona Silt Loam, Shelby County</em>. USDA NRCS Shelby County Field Office. <em>Planned validation of exponential model parameters.</em></li>
+    <li>USDA-ARS. (2013). <em>Revised Universal Soil Loss Equation Version 2 (RUSLE2) User’s Reference Guide</em>. <em>Benchmark model; CoverMap paired runs used RUSLE2 v2.7.1 with Shelby County soil and climate data.</em></li>
     <li>USDA NRCS. (2024). <em>Web Soil Survey — SSURGO Database</em>. Soil Data Access API (SDMDataAccess.nrcs.usda.gov). <em>Source for K-factor (kwfact) and soil series identification.</em></li>
     <li>USGS. (2023). <em>3D Elevation Program (3DEP) — Seamless Elevation</em>, ImageServer. <em>Nationwide DEM fallback (resampled to 3 m) when the Iowa DNR 3 m LiDAR DEM is unavailable.</em></li>
   </ol>
